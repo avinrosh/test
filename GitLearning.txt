@@ -1,0 +1,73 @@
+Git Commands
+
+1.  git init
+2.  git status
+3.  git log
+4.  git add myFile.txt
+5.  git commit -m "My commit comment"
+6.  git add remote https://github.com/username/rpositoryName.git
+7.  git push origin master
+8.  git fetch origin master
+9.  git megre origin/master*
+10. git pull origin maste ( To do fetch and merge with one command)
+
+
+11. Someone made changes in Remote and commited there and I also made changes locally, committed locally and without fetching I wanted to push my changes to remote. I'll get following error.
+
+F:\Programming\Git\Practice>git push origin master
+To https://github.com/avinrosh/test.git
+ ! [rejected]        master -> master (fetch first)
+error: failed to push some refs to 'https://github.com/avinrosh/test.git'
+hint: Updates were rejected because the remote contains work that you do
+hint: not have locally. This is usually caused by another repository pushing
+hint: to the same ref. You may want to first integrate the remote changes
+hint: (e.g., 'git pull ...') before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+
+12. I am making change, I have fetched but I have not merged. And I commited locally then wanted to push to remote.
+
+To https://github.com/avinrosh/test.git
+ ! [rejected]        master -> master (non-fast-forward)
+error: failed to push some refs to 'https://github.com/avinrosh/test.git'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. Integrate the remote changes (e.g.
+hint: 'git pull ...') before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+
+If you go and mege. It will not merge. You have to use the command
+
+13. git merge origin/master --allow-unrelated-histories.
+
+This will megre remote changes with local master. But will not push the local changes which were commited. To update the remote repository
+
+Use the following command to push 
+
+git push origin master
+
+Conflicts
+
+There is a file with same name on local and remote. And more than one deveporrs are working on that file. Let's say developer2 did something in his local repository and synched his changes to remote repository. I as a developer1 also made changes to that file. Staged that file for commit. Committed and tried to push to remote I'll get the error in #11.
+
+But let say I fetched the remote repository and tried to merge. I'll get the confilicts because there are two different commits ( Local/Remote) to the same file. First I should resolve the conflicts, accept the changes and then only it can be merged.
+
+Branches
+-----------------
+
+First create the branch locally, specific to any feature update/ bug fixes.
+
+git branch feature1
+git checkout feature1
+
+The current HEAD moves to the branch feature1
+Here we do all the usual stuff as we do with master, e.g. add, commit etc. Next we push to the remote, using
+
+git push origin feature1
+
+*Note: If you want to push to origin master, it will not push to remote master.
+
+Once we push to the remote branch, there in remote repository we get a pull request to review the code before merging it to the remote origin master. We can assign a reviewer or simply approve.
+
+Once merged with origin master can delete the branches using the following commands
+
+Local: git branch -d feature1.
+Remote: git push origin -d feature1
