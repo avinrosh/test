@@ -1,4 +1,8 @@
 This is first commit.
 This change was done on server.
 Change was made to test pull request.
+<<<<<<< HEAD
 I am making chages in local and with out fetchng remote tring to push.
+=======
+Developer 2 made changes on server and without fething I tried to push my commit.
+>>>>>>> origin/master
