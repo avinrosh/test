@@ -1,2 +1,0 @@
-This is feature2 from local
-This is feature 2
