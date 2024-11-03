@@ -139,7 +139,7 @@
             "type": "Microsoft.Search/searchServices",
             "apiVersion": "2021-04-01-Preview",
             "name": "[parameters('Azure Search Name')]",
-            "location": "East US",
+            "location": "UK South",
             "sku": {
                 "name": "[parameters('Azure Search SKU')]"
             },
@@ -154,7 +154,7 @@
             "type": "Microsoft.CognitiveServices/accounts",
             "apiVersion": "2021-10-01",
             "name": "[parameters('Cognitive Service Name')]",
-            "location": "East US",
+            "location": "UK South",
             "sku": {
                 "name": "[parameters('Cognitive Service SKU')]"
             },
@@ -169,7 +169,7 @@
             "type": "Microsoft.Sql/servers",
             "apiVersion": "2022-05-01-preview",
             "name": "[parameters('SQLserver Name')]",
-            "location": "East US",
+            "location": "UK South",
             "properties": {
                 "administratorLogin": "[parameters('SQLadministratorLogin')]",
                 "administratorLoginPassword": "[parameters('SQLadministratorLoginPassword')]"
@@ -179,7 +179,7 @@
                     "type": "Microsoft.Sql/servers/databases",
                     "apiVersion": "2022-05-01-preview",
                     "name": "[format('{0}/{1}', parameters('SQLserver Name'), parameters('SQLDB Name'))]",
-                    "location": "East US",
+                    "location": "UK South",
                     "dependsOn": [
                         "[resourceId('Microsoft.Sql/servers/', parameters('SQLserver Name'))]"
                     ],
@@ -206,13 +206,13 @@
             "type": "Microsoft.DocumentDB/databaseAccounts",
             "apiVersion": "2020-04-01",
             "name": "[parameters('Cosmos Account Name')]",
-            "location": "East US",
+            "location": "UK South",
             "kind": "GlobalDocumentDB",
             "properties" : {
                 "databaseAccountOfferType": "Standard",
                 "locations": [
                     {
-                      "locationName": "East US"
+                      "locationName": "UK South"
                     }
                   ],
                 "enableFreeTier": false,
@@ -229,7 +229,7 @@
             "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
             "name": "[concat(parameters('Cosmos Account Name'), '/', parameters('Cosmos Database Name'))]",
             "apiVersion": "2020-04-01",
-            "location": "East US",
+            "location": "UK South",
             "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('Cosmos Account Name'))]"
             ],
@@ -243,7 +243,7 @@
             "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
             "name": "[concat(parameters('Cosmos Account Name'), '/', parameters('Cosmos Database Name'), '/', parameters('Cosmos Container Name'))]",
             "apiVersion": "2020-04-01",
-            "location": "East US",
+            "location": "UK South",
             "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases',parameters('Cosmos Account Name'), parameters('Cosmos Database Name'))]"   
             ],
