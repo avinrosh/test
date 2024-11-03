@@ -63,7 +63,7 @@
             }
         },
         "Cognitive Service Name": {
-            "defaultValue": "[format('cognitive-service-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "multicogservicepoc",
             "type": "string",
             "metadata": {
                 "description": "That name is the name of our application. It has to be unique.Type a name followed by your resource group name. (<name>-<resourceGroupName>)"
