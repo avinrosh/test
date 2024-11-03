@@ -3,7 +3,7 @@
     "contentVersion": "1.0.0.0",
     "parameters": {
         "Azure Search Name": {
-            "defaultValue": "cogsearchpoc",
+            "defaultValue": "cogsearchpoc123456",
             "minLength": 2,
             "maxLength": 60,
             "type": "string",
