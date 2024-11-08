@@ -196,7 +196,7 @@
 			"tags": "[parameters('resourceTags')]",
             "properties": {
                 "administratorLogin": "[parameters('SQLadministratorLogin')]",
-                "administratorLoginPassword": "[parameters('SQLadministratorLoginPassword')]"
+                "administratorLoginPassword": "[parameters('SQLadministratorLoginPassword')]",
 				"publicNetworkAccess": "Disabled"
             },
             "resources": [
