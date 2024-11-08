@@ -2,8 +2,22 @@
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
     "contentVersion": "1.0.0.0",
     "parameters": {
+	"companyName": {
+      "type": "string",
+      "defaultValue": "ar",
+      "metadata": {
+        "description": "The name of the company."
+      }
+    },
+    "projectName": {
+      "type": "string",
+      "defaultValue": "fdot-d2",
+      "metadata": {
+        "description": "The name of the project."
+      }
+    },
         "Azure Search Name": {
-            "defaultValue": "cogsearchpoc123456",
+            "defaultValue": "[concat('az-search',parameters('companyName'), '-', parameters('projectName'),'001']",
             "minLength": 2,
             "maxLength": 60,
             "type": "string",
@@ -132,14 +146,22 @@
             "metadata": {
               "description": "The name for the CosmosDB database container"
             }
-          }
+          },
+	    "resourceTags": {
+            "type": "object",
+            "defaultValue": {
+            "Environment": "Dev",
+            "Project": "fdot-d2"
+      }
+    }
     },
     "resources": [
         {
             "type": "Microsoft.Search/searchServices",
             "apiVersion": "2021-04-01-Preview",
             "name": "[parameters('Azure Search Name')]",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "sku": {
                 "name": "[parameters('Azure Search SKU')]"
             },
@@ -154,7 +176,8 @@
             "type": "Microsoft.CognitiveServices/accounts",
             "apiVersion": "2021-10-01",
             "name": "[parameters('Cognitive Service Name')]",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "sku": {
                 "name": "[parameters('Cognitive Service SKU')]"
             },
@@ -169,7 +192,8 @@
             "type": "Microsoft.Sql/servers",
             "apiVersion": "2022-05-01-preview",
             "name": "[parameters('SQLserver Name')]",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "properties": {
                 "administratorLogin": "[parameters('SQLadministratorLogin')]",
                 "administratorLoginPassword": "[parameters('SQLadministratorLoginPassword')]"
@@ -179,7 +203,8 @@
                     "type": "Microsoft.Sql/servers/databases",
                     "apiVersion": "2022-05-01-preview",
                     "name": "[format('{0}/{1}', parameters('SQLserver Name'), parameters('SQLDB Name'))]",
-                    "location": "UK South",
+                    "location": "East US",
+					"tags": "[parameters('resourceTags')]",
                     "dependsOn": [
                         "[resourceId('Microsoft.Sql/servers/', parameters('SQLserver Name'))]"
                     ],
@@ -206,13 +231,14 @@
             "type": "Microsoft.DocumentDB/databaseAccounts",
             "apiVersion": "2020-04-01",
             "name": "[parameters('Cosmos Account Name')]",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "kind": "GlobalDocumentDB",
             "properties" : {
                 "databaseAccountOfferType": "Standard",
                 "locations": [
                     {
-                      "locationName": "UK South"
+                      "locationName": "East US"
                     }
                   ],
                 "enableFreeTier": false,
@@ -229,7 +255,8 @@
             "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
             "name": "[concat(parameters('Cosmos Account Name'), '/', parameters('Cosmos Database Name'))]",
             "apiVersion": "2020-04-01",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('Cosmos Account Name'))]"
             ],
@@ -243,7 +270,8 @@
             "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
             "name": "[concat(parameters('Cosmos Account Name'), '/', parameters('Cosmos Database Name'), '/', parameters('Cosmos Container Name'))]",
             "apiVersion": "2020-04-01",
-            "location": "UK South",
+            "location": "East US",
+			"tags": "[parameters('resourceTags')]",
             "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases',parameters('Cosmos Account Name'), parameters('Cosmos Database Name'))]"   
             ],
@@ -267,6 +295,7 @@
             "kind": "Bing.Search.v7",
             "name": "[parameters('Bing Search API Name')]",
             "location": "global",
+			"tags": "[parameters('resourceTags')]",
             "sku": {
                 "name": "S1"
             }
