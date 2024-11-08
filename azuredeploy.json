@@ -197,6 +197,7 @@
             "properties": {
                 "administratorLogin": "[parameters('SQLadministratorLogin')]",
                 "administratorLoginPassword": "[parameters('SQLadministratorLoginPassword')]"
+				"publicNetworkAccess": "Disabled"
             },
             "resources": [
                 {
@@ -243,7 +244,7 @@
                   ],
                 "enableFreeTier": false,
                 "isVirtualNetworkFilterEnabled": false,
-                "publicNetworkAccess": "Enabled",
+                "publicNetworkAccess": "Disabled",
                 "capabilities": [
                     {
                         "name": "EnableServerless"
