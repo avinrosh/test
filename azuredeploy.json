@@ -17,7 +17,7 @@
       }
     },
         "Azure Search Name": {
-            "defaultValue": "[concat('az-search',parameters('companyName'), '-', parameters('projectName'),'001']",
+            "defaultValue": "[concat('az-search-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "minLength": 2,
             "maxLength": 60,
             "type": "string",
@@ -77,7 +77,7 @@
             }
         },
         "Cognitive Service Name": {
-            "defaultValue": "[format('cognitive-service-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-cog-search-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "type": "string",
             "metadata": {
                 "description": "That name is the name of our application. It has to be unique.Type a name followed by your resource group name. (<name>-<resourceGroupName>)"
@@ -94,14 +94,14 @@
             }
         },
         "SQLserver Name": {
-            "defaultValue": "[format('sql-server-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-sql-server-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "type": "string",
             "metadata": {
                 "description": "The name of the SQL logical server."
             }
         },
         "SQLDB Name": {
-            "defaultValue": "openaipocDB",
+            "defaultValue": "[concat('az-sqldb-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "type": "String",
             "metadata": {
                 "description": "The name of the SQL Database."
@@ -120,7 +120,7 @@
             }
         },
         "Bing Search API Name": {
-            "defaultValue": "[format('bing-search-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-bing-search-api-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "type": "string",
             "metadata": {
                 "description": "The name of the Bing Search API service"
@@ -128,21 +128,21 @@
         },
         "Cosmos Account Name": {
             "type": "string",
-            "defaultValue": "[format('cosmosdb-account-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-cosmosdb-account-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "metadata": {
               "description": "Cosmos DB account name, max length 44 characters, lowercase"
             }
         },
         "Cosmos Database Name": {
             "type": "string",
-            "defaultValue": "[format('cosmosdb-db-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-cosmosdb-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "metadata": {
               "description": "The name for the CosmosDB database"
             }
           },
         "Cosmos Container Name": {
             "type": "string",
-            "defaultValue": "[format('cosmosdb-container-{0}', uniqueString(resourceGroup().id))]",
+            "defaultValue": "[concat('az-cosmos-container-',parameters('companyName'), '-', parameters('projectName'),'001']",
             "metadata": {
               "description": "The name for the CosmosDB database container"
             }
