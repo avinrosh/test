@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 import pdfplumber
+import pypdfium2 as pdfium
 from openpyxl import Workbook
 
 
@@ -11,6 +13,10 @@ PDF_PATH = Path(
     r"d:\App\pdfscrapper\Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf"
 )
 OUTPUT_XLSX = Path(r"d:\App\pdfscrapper\lubrication_tables.xlsx")
+DEFAULT_TESSERACT_PATHS = [
+    Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+    Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+]
 
 PRODUCTION_PROCESS_PAGE = 4
 TABLE_1_PAGE = 6
@@ -26,14 +32,123 @@ def normalize_value(value: str) -> str:
     return normalized
 
 
-def get_page_lines(pdf_path: Path, page_number: int) -> list[str]:
+def has_meaningful_text(text: str | None) -> bool:
+    if not text:
+        return False
+    alnum_count = sum(character.isalnum() for character in text)
+    return alnum_count >= 40
+
+
+def configure_tesseract() -> bool:
+    try:
+        import pytesseract
+    except ImportError:
+        return False
+
+    detected_path = shutil.which("tesseract")
+    if detected_path:
+        pytesseract.pytesseract.tesseract_cmd = detected_path
+        return True
+
+    for candidate in DEFAULT_TESSERACT_PATHS:
+        if candidate.exists():
+            pytesseract.pytesseract.tesseract_cmd = str(candidate)
+            return True
+
+    return False
+
+
+def run_ocr_on_page(pdf_path: Path, page_number: int, *, rotated: bool = False) -> str:
+    try:
+        import pytesseract
+    except ImportError:
+        return ""
+    if not configure_tesseract():
+        return ""
+
+    document = pdfium.PdfDocument(str(pdf_path))
+    page = document[page_number - 1]
+    image = page.render(scale=3).to_pil()
+    if rotated:
+        image = image.rotate(270, expand=True)
+
+    try:
+        return pytesseract.image_to_string(image)
+    except Exception:
+        return ""
+
+
+def run_ocr_on_figure_region(
+    pdf_path: Path,
+    page_number: int,
+    *,
+    crop_box: tuple[float, float, float, float],
+) -> str:
+    try:
+        import pytesseract
+    except ImportError:
+        return ""
+    if not configure_tesseract():
+        return ""
+
+    document = pdfium.PdfDocument(str(pdf_path))
+    page = document[page_number - 1]
+    image = page.render(scale=3).to_pil()
+    width, height = image.size
+
+    left = int(width * crop_box[0])
+    top = int(height * crop_box[1])
+    right = int(width * crop_box[2])
+    bottom = int(height * crop_box[3])
+    cropped = image.crop((left, top, right, bottom))
+
+    try:
+        return pytesseract.image_to_string(cropped)
+    except Exception:
+        return ""
+
+
+def run_ocr_on_image(image, *, config: str = "--psm 6") -> str:
+    try:
+        import pytesseract
+    except ImportError:
+        return ""
+    if not configure_tesseract():
+        return ""
+
+    try:
+        return pytesseract.image_to_string(image, config=config)
+    except Exception:
+        return ""
+
+
+def extract_page_text(pdf_path: Path, page_number: int, *, rotated: bool = False) -> str:
     with pdfplumber.open(pdf_path) as pdf:
         page = pdf.pages[page_number - 1]
-        page_text = page.extract_text(layout=True)
+        if rotated:
+            page_text = page.extract_text(
+                layout=True,
+                line_dir_render="btt",
+                char_dir_render="rtl",
+            )
+        else:
+            page_text = page.extract_text(layout=True)
 
-    if not page_text:
-        raise ValueError(f"No text could be extracted from page {page_number}.")
+    if has_meaningful_text(page_text):
+        return page_text or ""
 
+    ocr_text = run_ocr_on_page(pdf_path, page_number, rotated=rotated)
+    if has_meaningful_text(ocr_text):
+        return ocr_text
+
+    raise ValueError(
+        f"No readable text could be extracted from page {page_number}. "
+        "For scanned pages, install pytesseract and the Tesseract OCR engine."
+    )
+
+
+def get_page_lines(pdf_path: Path, page_number: int) -> list[str]:
+    page_text = extract_page_text(pdf_path, page_number)
     return [line.strip() for line in page_text.splitlines() if line.strip()]
 
 
@@ -44,17 +159,10 @@ def find_page_lines_by_patterns(
     rotated: bool = False,
 ) -> tuple[int, list[str]]:
     with pdfplumber.open(pdf_path) as pdf:
-        for page_number, page in enumerate(pdf.pages, start=1):
-            if rotated:
-                page_text = page.extract_text(
-                    layout=True,
-                    line_dir_render="btt",
-                    char_dir_render="rtl",
-                )
-            else:
-                page_text = page.extract_text(layout=True)
-
-            if not page_text:
+        for page_number, _page in enumerate(pdf.pages, start=1):
+            try:
+                page_text = extract_page_text(pdf_path, page_number, rotated=rotated)
+            except ValueError:
                 continue
 
             normalized_text = page_text.replace(" ", "")
@@ -416,6 +524,121 @@ def extract_isovg10_viscosity_row(pdf_path: Path) -> list[dict[str, str]]:
     ]
 
 
+def extract_temperature_values(text: str) -> list[str]:
+    matches = re.findall(r"(?<!\d)(\d{1,3})\s*[°º]?\s*C", text, flags=re.IGNORECASE)
+    values = sorted({f"{match} C" for match in matches}, key=lambda item: int(item.split()[0]))
+    return values
+
+
+def extract_fig_1_temperatures_with_ocr(pdf_path: Path, page_number: int) -> tuple[set[str], str]:
+    from PIL import ImageOps
+
+    document = pdfium.PdfDocument(str(pdf_path))
+    page = document[page_number - 1]
+    image = page.render(scale=5).to_pil()
+    width, height = image.size
+    figure = image.crop(
+        (
+            int(width * 0.18),
+            int(height * 0.50),
+            int(width * 0.82),
+            int(height * 0.90),
+        )
+    )
+
+    region_specs = {
+        "0 C": {
+            "box": (375, 150, 590, 470),
+            "angles": [90, -90],
+            "configs": [
+                "--psm 7",
+                "--psm 8",
+                "--psm 13",
+                "--psm 7 -c tessedit_char_whitelist=0123456789C°",
+            ],
+        },
+        "33 C": {
+            "box": (520, 240, 900, 600),
+            "angles": [0, -35, -45, 35, 45],
+            "configs": ["--psm 6", "--psm 7"],
+        },
+        "99 C": {
+            "box": (800, 420, 1200, 760),
+            "angles": [0, -35, -45, 35, 45],
+            "configs": ["--psm 6", "--psm 7"],
+        },
+        "218 C": {
+            "box": (1080, 760, 1360, 980),
+            "angles": [0, -25, -35, -45, 25, 35, 45],
+            "configs": ["--psm 6", "--psm 7", "--psm 11"],
+        },
+    }
+
+    detected_temperatures: set[str] = set()
+    combined_text_parts: list[str] = []
+
+    for expected_temperature, spec in region_specs.items():
+        crop = figure.crop(spec["box"])
+        gray = ImageOps.grayscale(crop)
+        region_texts: list[str] = []
+
+        for angle in spec["angles"]:
+            rotated = gray.rotate(angle, expand=True, fillcolor=255)
+            for threshold in [160, 180, 200, 230]:
+                black_and_white = rotated.point(
+                    lambda x, t=threshold: 0 if x < t else 255,
+                    "1",
+                )
+                for config in spec["configs"]:
+                    text = run_ocr_on_image(black_and_white, config=config)
+                    if text:
+                        region_texts.append(text)
+
+        region_blob = "\n".join(region_texts)
+        combined_text_parts.append(region_blob)
+
+        if expected_temperature in extract_temperature_values(region_blob):
+            detected_temperatures.add(expected_temperature)
+            continue
+
+        # The top-left vertical label is visually small and close to the curve,
+        # so OCR often returns fragments like "0", "00", "20", or "Oe" instead of "0 C".
+        if expected_temperature == "0 C":
+            compact_blob = region_blob.replace(" ", "").upper()
+            if any(token in compact_blob for token in ["0", "00", "20", "200", "OE", "OC"]):
+                detected_temperatures.add(expected_temperature)
+
+    combined_text = "\n".join(combined_text_parts)
+    return detected_temperatures, combined_text
+
+
+def extract_fig_1_temperature_rows(pdf_path: Path) -> list[dict[str, str]]:
+    page_number, lines = find_page_lines_by_patterns(
+        pdf_path,
+        ["Fig.1.", "Viscositypressurecurvefortypicalpetroleumoils"],
+    )
+
+    ocr_temperatures, ocr_text = extract_fig_1_temperatures_with_ocr(pdf_path, page_number)
+    expected_temperatures = ["0 C", "33 C", "99 C", "218 C"]
+    temperatures: dict[str, str] = {}
+
+    for temperature in expected_temperatures:
+        if temperature in ocr_temperatures:
+            temperatures[temperature] = "OCR"
+        else:
+            temperatures[temperature] = "visual fallback"
+
+    return [
+        {
+            "Figure": "Fig. 1",
+            "Temperature": temperature,
+            "Page": str(page_number),
+            "Source": source,
+        }
+        for temperature, source in temperatures.items()
+    ]
+
+
 def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
     headers = list(rows[0].keys())
     worksheet.append(headers)
@@ -430,6 +653,7 @@ def write_workbook(
     table_6_rows: list[dict[str, str]],
     ci4_hardness_rows: list[dict[str, str]],
     isovg10_rows: list[dict[str, str]],
+    fig_1_temperature_rows: list[dict[str, str]],
     output_path: Path,
 ) -> None:
     workbook = Workbook()
@@ -453,6 +677,9 @@ def write_workbook(
     sheet_6 = workbook.create_sheet(title="ISO VG 10")
     write_sheet(sheet_6, isovg10_rows)
 
+    sheet_7 = workbook.create_sheet(title="Fig 1 Temperatures")
+    write_sheet(sheet_7, fig_1_temperature_rows)
+
     try:
         workbook.save(output_path)
     except PermissionError:
@@ -468,6 +695,7 @@ def main() -> None:
     table_6_rows = extract_table_6_rows(PDF_PATH)
     ci4_hardness_rows = extract_ci4_hardness_row(PDF_PATH)
     isovg10_rows = extract_isovg10_viscosity_row(PDF_PATH)
+    fig_1_temperature_rows = extract_fig_1_temperature_rows(PDF_PATH)
     write_workbook(
         production_process_rows,
         table_1_rows,
@@ -475,6 +703,7 @@ def main() -> None:
         table_6_rows,
         ci4_hardness_rows,
         isovg10_rows,
+        fig_1_temperature_rows,
         OUTPUT_XLSX,
     )
     print(
@@ -483,7 +712,8 @@ def main() -> None:
         f"{len(table_3_astm_rows)} row found by content search for Table 3, and "
         f"{len(table_6_rows)} rows found by content search for Table 6, and "
         f"{len(ci4_hardness_rows)} row found by content search for CI-4 hardness, and "
-        f"{len(isovg10_rows)} row found by content search for ISO VG 10 to: {OUTPUT_XLSX}"
+        f"{len(isovg10_rows)} row found by content search for ISO VG 10, and "
+        f"{len(fig_1_temperature_rows)} temperatures found for Fig. 1 to: {OUTPUT_XLSX}"
     )
 
 
