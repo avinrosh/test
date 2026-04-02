@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
+import time
 from pathlib import Path
 
 import pdfplumber
@@ -10,9 +12,10 @@ from openpyxl import Workbook
 
 
 PDF_PATH = Path(
-    r"d:\App\pdfscrapper\Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf"
+    r"d:\App\pdfscrapper\testTable.pdf"
 )
 OUTPUT_XLSX = Path(r"d:\App\pdfscrapper\lubrication_tables.xlsx")
+REQUESTS_FILE = Path(r"d:\App\pdfscrapper\extract_requests.txt")
 DEFAULT_TESSERACT_PATHS = [
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
     Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
@@ -30,6 +33,48 @@ def normalize_value(value: str) -> str:
     normalized = normalized.replace("(cid:4)", "^-")
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
+
+
+def normalize_option_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def normalize_cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\n", " ")
+    return normalize_value(text)
+
+
+def resolve_runtime_paths() -> tuple[Path, Path | None]:
+    pdf_path = PDF_PATH
+    requests_file: Path | None = None
+
+    for argument in sys.argv[1:]:
+        candidate = Path(argument)
+        if candidate.suffix.lower() == ".pdf":
+            pdf_path = candidate
+        elif candidate.suffix.lower() == ".txt":
+            requests_file = candidate
+
+    if requests_file is None and REQUESTS_FILE.exists():
+        requests_file = REQUESTS_FILE
+
+    return pdf_path, requests_file
+
+
+def load_requested_options(requests_file: Path | None) -> set[str] | None:
+    if requests_file is None or not requests_file.exists():
+        return None
+
+    requested_options: set[str] = set()
+    for raw_line in requests_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        requested_options.add(normalize_option_name(line))
+
+    return requested_options or None
 
 
 def has_meaningful_text(text: str | None) -> bool:
@@ -120,6 +165,24 @@ def run_ocr_on_image(image, *, config: str = "--psm 6") -> str:
         return pytesseract.image_to_string(image, config=config)
     except Exception:
         return ""
+
+
+def extract_ocr_words_from_image(image, *, config: str = "--psm 6") -> list[dict]:
+    try:
+        import pytesseract
+    except ImportError:
+        return []
+    if not configure_tesseract():
+        return []
+
+    dataframe = pytesseract.image_to_data(
+        image,
+        output_type=pytesseract.Output.DATAFRAME,
+        config=config,
+    )
+    dataframe = dataframe.dropna(subset=["text"])
+    dataframe = dataframe[dataframe["text"].astype(str).str.strip() != ""]
+    return dataframe.to_dict("records")
 
 
 def extract_page_text(pdf_path: Path, page_number: int, *, rotated: bool = False) -> str:
@@ -640,51 +703,281 @@ def extract_fig_1_temperature_rows(pdf_path: Path) -> list[dict[str, str]]:
 
 
 def extract_oxx_rows(pdf_path: Path) -> list[dict[str, str]]:
-    target_labels = {
-        "internalpreservation": "Internal preservation",
-        "externalpreservation": "External preservation",
-    }
+    page_number, lines = find_page_lines_by_patterns(
+        pdf_path,
+        ["Table2.5:", "preservationofthepump:"],
+    )
 
+    normalized_lines = [normalize_value(line) for line in lines]
+
+    def normalize_product(text: str) -> str:
+        text = normalize_value(text)
+        replacements = {
+            "Chemetal!": "Chemetall",
+            "Chemetal": "Chemetall",
+            "Chemetalll": "Chemetall",
+            "Ararox": "Ardrox",
+            "Tecty|": "Tectyl",
+            "Tectv|": "Tectyl",
+            "|N-PROFLEX": "N-PROFLEX",
+            "POLY!": "N-PROFLEX",
+            "POULy!": "N-PROFLEX",
+            "651 5": "6515",
+            "651,5": "6515",
+            "317,": "317",
+            "-KSP": "- KSP",
+            "Rivolta-": "Rivolta - ",
+            "396/171": "396/1",
+            "| M": " M",
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        text = re.sub(r"\s+", " ", text).strip(" |,._-")
+        return text
+
+    rows: list[dict[str, str]] = []
+    inside_table = False
+    current_type: str | None = None
+
+    for line in normalized_lines:
+        compact = re.sub(r"\s+", "", line).lower()
+
+        if "table2.5:" in compact:
+            inside_table = True
+            continue
+
+        if not inside_table:
+            continue
+
+        if compact.startswith("3.") or compact.startswith("observe"):
+            break
+
+        if "recommendedproductsforthepreservationofthepump:" in compact:
+            continue
+
+        internal_match = re.search(
+            r"Internal preservation\s+(.*)$",
+            line,
+            re.I,
+        )
+        if internal_match:
+            current_type = "Internal preservation"
+            detail = normalize_product(internal_match.group(1))
+            if detail:
+                rows.append(
+                    {
+                        "Type": current_type,
+                        "Details": detail,
+                        "Page": str(page_number),
+                        "Source": "PDF text",
+                    }
+                )
+            continue
+
+        external_match = re.search(
+            r"External preservation\s+(.*)$",
+            line,
+            re.I,
+        )
+        if external_match:
+            current_type = "External preservation"
+            detail = normalize_product(external_match.group(1))
+            if detail:
+                rows.append(
+                    {
+                        "Type": current_type,
+                        "Details": detail,
+                        "Page": str(page_number),
+                        "Source": "PDF text",
+                    }
+                )
+            continue
+
+        if current_type == "Internal preservation":
+            detail = normalize_product(line)
+            if detail:
+                rows.append(
+                    {
+                        "Type": current_type,
+                        "Details": detail,
+                        "Page": str(page_number),
+                        "Source": "PDF text",
+                    }
+                )
+
+    if rows:
+        return rows
+
+    document = pdfium.PdfDocument(str(pdf_path))
+    page = document[page_number - 1]
+    image = page.render(scale=3).to_pil()
+    width, height = image.size
+    table_image = image.crop(
+        (
+            int(width * 0.04),
+            int(height * 0.50),
+            int(width * 0.92),
+            int(height * 0.78),
+        )
+    )
+
+    def best_words(box: tuple[int, int, int, int], configs: list[str]) -> list[dict]:
+        from PIL import ImageOps
+
+        crop = table_image.crop(box)
+        best: list[dict] = []
+        for threshold in [150, 170, 190, 210]:
+            gray = ImageOps.grayscale(crop)
+            black_and_white = gray.point(lambda x, t=threshold: 0 if x < t else 255, "1")
+            for config in configs:
+                words = extract_ocr_words_from_image(black_and_white, config=config)
+                if len(words) > len(best):
+                    best = words
+        return best
+
+    def find_best_match(
+        box: tuple[int, int, int, int],
+        pattern: str,
+        configs: list[str],
+    ) -> str:
+        from PIL import ImageOps
+
+        crop = table_image.crop(box)
+        candidates: list[str] = []
+        for threshold in [150, 170, 190, 210]:
+            gray = ImageOps.grayscale(crop)
+            black_and_white = gray.point(lambda x, t=threshold: 0 if x < t else 255, "1")
+            for config in configs:
+                text = normalize_product(run_ocr_on_image(black_and_white, config=config))
+                if text:
+                    candidates.append(text)
+
+        for candidate in candidates:
+            match = re.search(pattern, candidate, re.I)
+            if match:
+                return normalize_product(match.group(1))
+
+        return ""
+
+    def words_to_text(words: list[dict]) -> str:
+        return normalize_product(" ".join(str(word["text"]) for word in words))
+
+    row2_text = words_to_text(best_words((2400, 600, 6100, 980), ["--psm 6", "--psm 7"]))
+    row3_text = words_to_text(best_words((2400, 760, 6100, 1220), ["--psm 6", "--psm 7"]))
+    row4_text = words_to_text(best_words((0, 930, 6100, 1500), ["--psm 6", "--psm 7", "--psm 11"]))
+    row1_match = find_best_match(
+        (2400, 330, 6100, 760),
+        r"(Chemetall+\s*-\s*Ardrox\s*396/1\s*\|?\s*M)",
+        ["--psm 6", "--psm 7", "--psm 11"],
+    )
+
+    rows = []
+    patterns = [
+        ("Internal preservation", row1_match, r"(.+)"),
+        ("Internal preservation", row2_text, r"(Tectyl\s*542)"),
+        ("Internal preservation", row3_text, r"(N-PROFLEX\s*code\s*6515)"),
+        ("External preservation", row4_text, r"(Rivolta\s*-\s*KSP\s*317)"),
+    ]
+    for row_type, text, pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            rows.append(
+                {
+                    "Type": row_type,
+                    "Details": normalize_product(match.group(1)),
+                    "Page": str(page_number),
+                    "Source": "PDF OCR",
+                }
+            )
+
+    if rows:
+        return rows
+
+    raise ValueError("Could not find OXX preservation details in the PDF.")
+
+
+def extract_product_table_rows(pdf_path: Path) -> list[dict[str, str]]:
+    def find_matching_header(table: list[list[object]]) -> tuple[int, dict[str, int]] | None:
+        for row_index, row in enumerate(table[:5]):
+            normalized_cells = [normalize_option_name(normalize_cell_text(cell)) for cell in row]
+
+            product_index = next(
+                (
+                    index
+                    for index, cell in enumerate(normalized_cells)
+                    if cell in {"nameoftheproduct", "product"}
+                ),
+                None,
+            )
+            manufacturer_index = next(
+                (
+                    index
+                    for index, cell in enumerate(normalized_cells)
+                    if cell == "manufacturer"
+                ),
+                None,
+            )
+            user_index = next(
+                (
+                    index
+                    for index, cell in enumerate(normalized_cells)
+                    if cell == "user"
+                ),
+                None,
+            )
+
+            if (
+                product_index is not None
+                and manufacturer_index is not None
+                and user_index is not None
+            ):
+                return (
+                    row_index,
+                    {
+                        "product": product_index,
+                        "manufacturer": manufacturer_index,
+                        "user": user_index,
+                    },
+                )
+        return None
+
+    rows: list[dict[str, str]] = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page_number in range(1, len(pdf.pages) + 1):
-            try:
-                page_text = extract_page_text(pdf_path, page_number)
-            except ValueError:
-                continue
-
-            lines = [normalize_value(line) for line in page_text.splitlines() if line.strip()]
-            rows: list[dict[str, str]] = []
-            current_type: str | None = None
-
-            for line in lines:
-                compact = re.sub(r"\s+", "", line).lower()
-
-                if compact in target_labels:
-                    current_type = target_labels[compact]
+        for page_number, page in enumerate(pdf.pages, start=1):
+            tables = page.extract_tables()
+            for table_index, table in enumerate(tables, start=1):
+                if not table:
                     continue
 
-                if current_type:
-                    if re.search(r"table|recommendedproducts", compact):
-                        continue
-                    if compact in target_labels:
-                        current_type = target_labels[compact]
-                        continue
-                    if not any(character.isalnum() for character in line):
+                header_match = find_matching_header(table)
+                if header_match is None:
+                    continue
+
+                header_row_index, column_map = header_match
+                for row in table[header_row_index + 1 :]:
+                    product_name = normalize_cell_text(row[column_map["product"]])
+                    manufacturer = normalize_cell_text(row[column_map["manufacturer"]])
+                    user_type = normalize_cell_text(row[column_map["user"]])
+
+                    if not product_name and not manufacturer and not user_type:
                         continue
 
                     rows.append(
                         {
-                            "Type": current_type,
-                            "Details": line,
+                            "Product name": product_name,
+                            "Manufacturer": manufacturer,
+                            "Type": user_type,
                             "Page": str(page_number),
-                            "Source": "PDF",
+                            "Source": f"PDF table {table_index}",
                         }
                     )
 
-            if rows:
-                return rows
+    if not rows:
+        raise ValueError(
+            "Could not find any table with Product/Manufacturer/User-style headers."
+        )
 
-    raise ValueError("Could not find OXX preservation details in the PDF.")
+    return rows
 
 
 def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
@@ -714,34 +1007,70 @@ def write_workbook(sheet_rows: list[tuple[str, list[dict[str, str]]]], output_pa
         print(f"Primary workbook was locked. Saved to: {fallback_path}")
 
 
-def try_extract_rows(extractor_name: str, extractor) -> list[dict[str, str]]:
+def try_extract_rows(pdf_path: Path, extractor_name: str, extractor) -> list[dict[str, str]]:
+    start_time = time.perf_counter()
+    print(f"Starting {extractor_name}...")
     try:
-        return extractor(PDF_PATH)
+        rows = extractor(pdf_path)
+        elapsed = time.perf_counter() - start_time
+        print(f"Completed {extractor_name} in {elapsed:.2f}s with {len(rows)} rows.")
+        return rows
     except Exception:
-        print(f"Skipping {extractor_name}: no details were found.")
+        elapsed = time.perf_counter() - start_time
+        print(f"Skipping {extractor_name}: no details were found. ({elapsed:.2f}s)")
         return []
 
 
 def main() -> None:
+    job_start_time = time.perf_counter()
+    pdf_path, requests_file = resolve_runtime_paths()
+    requested_options = load_requested_options(requests_file)
+    available_extractors = [
+        ("Production Process", extract_production_process_rows),
+        ("Table 1", extract_table_1_rows),
+        ("Table 3 ASTM", extract_table_3_astm_row),
+        ("Table 6", extract_table_6_rows),
+        ("CI-4 Hardness", extract_ci4_hardness_row),
+        ("ISO VG 10", extract_isovg10_viscosity_row),
+        ("Fig 1 Temperatures", extract_fig_1_temperature_rows),
+        ("Product Tables", extract_product_table_rows),
+        ("OXX", extract_oxx_rows),
+    ]
+
+    selected_extractors = available_extractors
+    if requested_options is not None:
+        selected_extractors = [
+            (sheet_name, extractor)
+            for sheet_name, extractor in available_extractors
+            if normalize_option_name(sheet_name) in requested_options
+        ]
+
+        unknown_options = sorted(
+            requested_options
+            - {normalize_option_name(sheet_name) for sheet_name, _extractor in available_extractors}
+        )
+        for option in unknown_options:
+            print(f"Skipping unknown option: {option}")
+
+    print(f"PDF: {pdf_path}")
+    print(f"Selected extractors: {len(selected_extractors)}")
     sheet_rows = [
-        ("Production Process", try_extract_rows("Production Process", extract_production_process_rows)),
-        ("Table 1", try_extract_rows("Table 1", extract_table_1_rows)),
-        ("Table 3 ASTM", try_extract_rows("Table 3 ASTM", extract_table_3_astm_row)),
-        ("Table 6", try_extract_rows("Table 6", extract_table_6_rows)),
-        ("CI-4 Hardness", try_extract_rows("CI-4 Hardness", extract_ci4_hardness_row)),
-        ("ISO VG 10", try_extract_rows("ISO VG 10", extract_isovg10_viscosity_row)),
-        ("Fig 1 Temperatures", try_extract_rows("Fig 1 Temperatures", extract_fig_1_temperature_rows)),
-        ("OXX", try_extract_rows("OXX", extract_oxx_rows)),
+        (sheet_name, try_extract_rows(pdf_path, sheet_name, extractor))
+        for sheet_name, extractor in selected_extractors
     ]
     found_sheet_rows = [(sheet_name, rows) for sheet_name, rows in sheet_rows if rows]
 
     if not found_sheet_rows:
+        total_elapsed = time.perf_counter() - job_start_time
         print("No details were found.")
+        print(f"Total time taken: {total_elapsed:.2f}s")
         return
 
     write_workbook(found_sheet_rows, OUTPUT_XLSX)
     total_rows = sum(len(rows) for _, rows in found_sheet_rows)
+    total_elapsed = time.perf_counter() - job_start_time
     print(f"Extracted {total_rows} rows across {len(found_sheet_rows)} sheets to: {OUTPUT_XLSX}")
+    print(f"Total time taken: {total_elapsed:.2f}s")
 
 
 if __name__ == "__main__":
