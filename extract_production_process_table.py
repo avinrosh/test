@@ -639,6 +639,54 @@ def extract_fig_1_temperature_rows(pdf_path: Path) -> list[dict[str, str]]:
     ]
 
 
+def extract_oxx_rows(pdf_path: Path) -> list[dict[str, str]]:
+    target_labels = {
+        "internalpreservation": "Internal preservation",
+        "externalpreservation": "External preservation",
+    }
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_number in range(1, len(pdf.pages) + 1):
+            try:
+                page_text = extract_page_text(pdf_path, page_number)
+            except ValueError:
+                continue
+
+            lines = [normalize_value(line) for line in page_text.splitlines() if line.strip()]
+            rows: list[dict[str, str]] = []
+            current_type: str | None = None
+
+            for line in lines:
+                compact = re.sub(r"\s+", "", line).lower()
+
+                if compact in target_labels:
+                    current_type = target_labels[compact]
+                    continue
+
+                if current_type:
+                    if re.search(r"table|recommendedproducts", compact):
+                        continue
+                    if compact in target_labels:
+                        current_type = target_labels[compact]
+                        continue
+                    if not any(character.isalnum() for character in line):
+                        continue
+
+                    rows.append(
+                        {
+                            "Type": current_type,
+                            "Details": line,
+                            "Page": str(page_number),
+                            "Source": "PDF",
+                        }
+                    )
+
+            if rows:
+                return rows
+
+    raise ValueError("Could not find OXX preservation details in the PDF.")
+
+
 def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
     headers = list(rows[0].keys())
     worksheet.append(headers)
@@ -646,39 +694,17 @@ def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
         worksheet.append([row[header] for header in headers])
 
 
-def write_workbook(
-    production_process_rows: list[dict[str, str]],
-    table_1_rows: list[dict[str, str]],
-    table_3_astm_rows: list[dict[str, str]],
-    table_6_rows: list[dict[str, str]],
-    ci4_hardness_rows: list[dict[str, str]],
-    isovg10_rows: list[dict[str, str]],
-    fig_1_temperature_rows: list[dict[str, str]],
-    output_path: Path,
-) -> None:
+def write_workbook(sheet_rows: list[tuple[str, list[dict[str, str]]]], output_path: Path) -> None:
     workbook = Workbook()
-
-    sheet_1 = workbook.active
-    sheet_1.title = "Production Process"
-    write_sheet(sheet_1, production_process_rows)
-
-    sheet_2 = workbook.create_sheet(title="Table 1")
-    write_sheet(sheet_2, table_1_rows)
-
-    sheet_3 = workbook.create_sheet(title="Table 3 ASTM")
-    write_sheet(sheet_3, table_3_astm_rows)
-
-    sheet_4 = workbook.create_sheet(title="Table 6")
-    write_sheet(sheet_4, table_6_rows)
-
-    sheet_5 = workbook.create_sheet(title="CI-4 Hardness")
-    write_sheet(sheet_5, ci4_hardness_rows)
-
-    sheet_6 = workbook.create_sheet(title="ISO VG 10")
-    write_sheet(sheet_6, isovg10_rows)
-
-    sheet_7 = workbook.create_sheet(title="Fig 1 Temperatures")
-    write_sheet(sheet_7, fig_1_temperature_rows)
+    first_sheet = True
+    for sheet_name, rows in sheet_rows:
+        if first_sheet:
+            worksheet = workbook.active
+            worksheet.title = sheet_name
+            first_sheet = False
+        else:
+            worksheet = workbook.create_sheet(title=sheet_name)
+        write_sheet(worksheet, rows)
 
     try:
         workbook.save(output_path)
@@ -688,33 +714,34 @@ def write_workbook(
         print(f"Primary workbook was locked. Saved to: {fallback_path}")
 
 
+def try_extract_rows(extractor_name: str, extractor) -> list[dict[str, str]]:
+    try:
+        return extractor(PDF_PATH)
+    except Exception:
+        print(f"Skipping {extractor_name}: no details were found.")
+        return []
+
+
 def main() -> None:
-    production_process_rows = extract_production_process_rows(PDF_PATH)
-    table_1_rows = extract_table_1_rows(PDF_PATH)
-    table_3_astm_rows = extract_table_3_astm_row(PDF_PATH)
-    table_6_rows = extract_table_6_rows(PDF_PATH)
-    ci4_hardness_rows = extract_ci4_hardness_row(PDF_PATH)
-    isovg10_rows = extract_isovg10_viscosity_row(PDF_PATH)
-    fig_1_temperature_rows = extract_fig_1_temperature_rows(PDF_PATH)
-    write_workbook(
-        production_process_rows,
-        table_1_rows,
-        table_3_astm_rows,
-        table_6_rows,
-        ci4_hardness_rows,
-        isovg10_rows,
-        fig_1_temperature_rows,
-        OUTPUT_XLSX,
-    )
-    print(
-        f"Extracted {len(production_process_rows)} rows from page {PRODUCTION_PROCESS_PAGE} "
-        f"{len(table_1_rows)} rows from page {TABLE_1_PAGE}, and "
-        f"{len(table_3_astm_rows)} row found by content search for Table 3, and "
-        f"{len(table_6_rows)} rows found by content search for Table 6, and "
-        f"{len(ci4_hardness_rows)} row found by content search for CI-4 hardness, and "
-        f"{len(isovg10_rows)} row found by content search for ISO VG 10, and "
-        f"{len(fig_1_temperature_rows)} temperatures found for Fig. 1 to: {OUTPUT_XLSX}"
-    )
+    sheet_rows = [
+        ("Production Process", try_extract_rows("Production Process", extract_production_process_rows)),
+        ("Table 1", try_extract_rows("Table 1", extract_table_1_rows)),
+        ("Table 3 ASTM", try_extract_rows("Table 3 ASTM", extract_table_3_astm_row)),
+        ("Table 6", try_extract_rows("Table 6", extract_table_6_rows)),
+        ("CI-4 Hardness", try_extract_rows("CI-4 Hardness", extract_ci4_hardness_row)),
+        ("ISO VG 10", try_extract_rows("ISO VG 10", extract_isovg10_viscosity_row)),
+        ("Fig 1 Temperatures", try_extract_rows("Fig 1 Temperatures", extract_fig_1_temperature_rows)),
+        ("OXX", try_extract_rows("OXX", extract_oxx_rows)),
+    ]
+    found_sheet_rows = [(sheet_name, rows) for sheet_name, rows in sheet_rows if rows]
+
+    if not found_sheet_rows:
+        print("No details were found.")
+        return
+
+    write_workbook(found_sheet_rows, OUTPUT_XLSX)
+    total_rows = sum(len(rows) for _, rows in found_sheet_rows)
+    print(f"Extracted {total_rows} rows across {len(found_sheet_rows)} sheets to: {OUTPUT_XLSX}")
 
 
 if __name__ == "__main__":
