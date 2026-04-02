@@ -14,7 +14,6 @@ from openpyxl import Workbook
 PDF_PATH = Path(
     r"d:\App\pdfscrapper\testTable.pdf"
 )
-OUTPUT_XLSX = Path(r"d:\App\pdfscrapper\lubrication_tables.xlsx")
 REQUESTS_FILE = Path(r"d:\App\pdfscrapper\extract_requests.txt")
 DEFAULT_TESSERACT_PATHS = [
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
@@ -46,35 +45,71 @@ def normalize_cell_text(value: object) -> str:
     return normalize_value(text)
 
 
-def resolve_runtime_paths() -> tuple[Path, Path | None]:
-    pdf_path = PDF_PATH
+def resolve_runtime_paths() -> tuple[list[Path], Path | None]:
+    pdf_paths: list[Path] = []
     requests_file: Path | None = None
 
     for argument in sys.argv[1:]:
         candidate = Path(argument)
         if candidate.suffix.lower() == ".pdf":
-            pdf_path = candidate
+            pdf_paths.append(candidate)
         elif candidate.suffix.lower() == ".txt":
             requests_file = candidate
 
     if requests_file is None and REQUESTS_FILE.exists():
         requests_file = REQUESTS_FILE
 
-    return pdf_path, requests_file
+    if not pdf_paths:
+        pdf_paths = [PDF_PATH]
+
+    return pdf_paths, requests_file
 
 
-def load_requested_options(requests_file: Path | None) -> set[str] | None:
+def split_request_options(value: str) -> set[str]:
+    options = {
+        normalize_option_name(part)
+        for part in re.split(r"[;,]", value)
+        if normalize_option_name(part)
+    }
+    return options
+
+
+def load_requested_options(
+    requests_file: Path | None,
+) -> tuple[set[str] | None, dict[str, set[str]]]:
     if requests_file is None or not requests_file.exists():
-        return None
+        return None, {}
 
     requested_options: set[str] = set()
+    per_pdf_options: dict[str, set[str]] = {}
     for raw_line in requests_file.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        requested_options.add(normalize_option_name(line))
 
-    return requested_options or None
+        if ":" in line:
+            pdf_name, raw_options = line.split(":", 1)
+            pdf_key = normalize_option_name(Path(pdf_name.strip()).name)
+            options = split_request_options(raw_options)
+            if pdf_key and options:
+                per_pdf_options[pdf_key] = options
+            continue
+
+        requested_options.update(split_request_options(line))
+
+    return requested_options or None, per_pdf_options
+
+
+def build_output_path(pdf_path: Path) -> Path:
+    return pdf_path.with_name(f"{pdf_path.stem}_tables.xlsx")
+
+
+def resolve_pdf_path(pdf_path: Path, requests_file: Path | None = None) -> Path:
+    if pdf_path.is_absolute():
+        return pdf_path
+    if requests_file is not None:
+        return (requests_file.parent / pdf_path).resolve()
+    return (Path.cwd() / pdf_path).resolve()
 
 
 def has_meaningful_text(text: str | None) -> bool:
@@ -980,6 +1015,184 @@ def extract_product_table_rows(pdf_path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def split_grease_detail(detail: str) -> tuple[str, str]:
+    cleaned = normalize_value(detail)
+    cleaned = re.sub(r"^[\-\u2022?\s]+", "", cleaned).strip()
+    cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned).strip()
+    if not cleaned:
+        return "", ""
+
+    tokens = cleaned.split()
+    if len(tokens) == 1:
+        return tokens[0], ""
+    return tokens[0], " ".join(tokens[1:])
+
+
+def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    pending_bullet_text: str | None = None
+    collecting_special_ball_bearing_bullets = False
+
+    def add_row(
+        *,
+        manufacturer: str,
+        product_name: str,
+        details: str,
+        page_number: int,
+        source: str,
+    ) -> None:
+        normalized_details = normalize_value(details)
+        normalized_manufacturer = normalize_value(manufacturer)
+        normalized_product_name = normalize_value(product_name)
+        key = (
+            normalized_manufacturer,
+            normalized_product_name,
+            normalized_details,
+            str(page_number),
+        )
+        if not any(key[:3]) or key in seen:
+            return
+        seen.add(key)
+        rows.append(
+            {
+                "Manufacturer": normalized_manufacturer,
+                "Product name": normalized_product_name,
+                "Details": normalized_details,
+                "Page": str(page_number),
+                "Source": source,
+            }
+        )
+
+    def extract_from_table(
+        table: list[list[object]],
+        page_number: int,
+        table_index: int,
+    ) -> None:
+        for row_index, row in enumerate(table[:5]):
+            normalized_cells = [normalize_option_name(normalize_cell_text(cell)) for cell in row]
+            manufacturer_index = next(
+                (
+                    index
+                    for index, cell in enumerate(normalized_cells)
+                    if cell == "manufacturer"
+                ),
+                None,
+            )
+            product_index = next(
+                (
+                    index
+                    for index, cell in enumerate(normalized_cells)
+                    if cell in {"product", "nameoftheproduct", "productname"}
+                ),
+                None,
+            )
+            if manufacturer_index is None or product_index is None:
+                continue
+
+            for data_row in table[row_index + 1 :]:
+                manufacturer = normalize_cell_text(data_row[manufacturer_index])
+                product_name = normalize_cell_text(data_row[product_index])
+                details = " - ".join(part for part in [manufacturer, product_name] if part)
+                add_row(
+                    manufacturer=manufacturer,
+                    product_name=product_name,
+                    details=details,
+                    page_number=page_number,
+                    source=f"PDF table {table_index}",
+                )
+            break
+
+    def flush_pending_bullet(page_number: int) -> None:
+        nonlocal pending_bullet_text
+        if not pending_bullet_text:
+            return
+        add_row(
+            manufacturer="",
+            product_name="",
+            details=pending_bullet_text,
+            page_number=page_number,
+            source="PDF bullet",
+        )
+        pending_bullet_text = None
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_number, page in enumerate(pdf.pages, start=1):
+            try:
+                page_text = extract_page_text(pdf_path, page_number)
+            except ValueError:
+                page_text = ""
+
+            lines = [normalize_value(line) for line in page_text.splitlines() if line.strip()]
+            page_has_grease_context = "grease" in page_text.lower() or "greases" in page_text.lower()
+
+            if page_has_grease_context:
+                for line in lines:
+                    compact_line = normalize_option_name(line)
+
+                    if "thefollowingproperties" in compact_line:
+                        collecting_special_ball_bearing_bullets = True
+                        flush_pending_bullet(page_number)
+                        continue
+
+                    if collecting_special_ball_bearing_bullets:
+                        if (
+                            "theabovementionedgreasespecificationisvalid" in compact_line
+                            or compact_line == "note"
+                            or compact_line.startswith("note")
+                        ):
+                            flush_pending_bullet(page_number)
+                            collecting_special_ball_bearing_bullets = False
+                        else:
+                            bullet_markers = ("\uf0b7", "?", "•")
+                            stripped_line = line.lstrip()
+                            left_column_text = line.split("--", 1)[0].strip()
+
+                            if stripped_line.startswith(bullet_markers):
+                                flush_pending_bullet(page_number)
+                                pending_bullet_text = re.sub(
+                                    r"^[\uf0b7?•\s]+",
+                                    "",
+                                    left_column_text,
+                                ).strip()
+                                continue
+
+                            if pending_bullet_text and left_column_text:
+                                pending_bullet_text = normalize_value(
+                                    f"{pending_bullet_text} {left_column_text}"
+                                )
+
+                    if "--" not in line:
+                        continue
+
+                    segments = [segment.strip() for segment in re.split(r"\s*--\s*", line) if segment.strip()]
+                    if not line.lstrip().startswith("--") and len(segments) > 1:
+                        segments = segments[1:]
+
+                    for segment in segments:
+                        manufacturer, product_name = split_grease_detail(segment)
+                        add_row(
+                            manufacturer=manufacturer,
+                            product_name=product_name,
+                            details=segment,
+                            page_number=page_number,
+                            source="PDF text",
+                        )
+
+            for table_index, table in enumerate(page.extract_tables(), start=1):
+                if not table:
+                    continue
+                extract_from_table(table, page_number, table_index)
+
+            flush_pending_bullet(page_number)
+            collecting_special_ball_bearing_bullets = False
+
+    if not rows:
+        raise ValueError("Could not find any grease details in the PDF.")
+
+    return rows
+
+
 def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
     headers = list(rows[0].keys())
     worksheet.append(headers)
@@ -987,7 +1200,10 @@ def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
         worksheet.append([row[header] for header in headers])
 
 
-def write_workbook(sheet_rows: list[tuple[str, list[dict[str, str]]]], output_path: Path) -> None:
+def write_workbook(
+    sheet_rows: list[tuple[str, list[dict[str, str]]]],
+    output_path: Path,
+) -> Path:
     workbook = Workbook()
     first_sheet = True
     for sheet_name, rows in sheet_rows:
@@ -1001,10 +1217,12 @@ def write_workbook(sheet_rows: list[tuple[str, list[dict[str, str]]]], output_pa
 
     try:
         workbook.save(output_path)
+        return output_path
     except PermissionError:
         fallback_path = output_path.with_name(f"{output_path.stem}_updated{output_path.suffix}")
         workbook.save(fallback_path)
         print(f"Primary workbook was locked. Saved to: {fallback_path}")
+        return fallback_path
 
 
 def try_extract_rows(pdf_path: Path, extractor_name: str, extractor) -> list[dict[str, str]]:
@@ -1021,11 +1239,8 @@ def try_extract_rows(pdf_path: Path, extractor_name: str, extractor) -> list[dic
         return []
 
 
-def main() -> None:
-    job_start_time = time.perf_counter()
-    pdf_path, requests_file = resolve_runtime_paths()
-    requested_options = load_requested_options(requests_file)
-    available_extractors = [
+def get_available_extractors():
+    return [
         ("Production Process", extract_production_process_rows),
         ("Table 1", extract_table_1_rows),
         ("Table 3 ASTM", extract_table_3_astm_row),
@@ -1033,10 +1248,16 @@ def main() -> None:
         ("CI-4 Hardness", extract_ci4_hardness_row),
         ("ISO VG 10", extract_isovg10_viscosity_row),
         ("Fig 1 Temperatures", extract_fig_1_temperature_rows),
+        ("Greases", extract_grease_rows),
         ("Product Tables", extract_product_table_rows),
         ("OXX", extract_oxx_rows),
     ]
 
+
+def select_extractors(
+    requested_options: set[str] | None,
+    available_extractors: list[tuple[str, object]],
+) -> list[tuple[str, object]]:
     selected_extractors = available_extractors
     if requested_options is not None:
         selected_extractors = [
@@ -1052,6 +1273,32 @@ def main() -> None:
         for option in unknown_options:
             print(f"Skipping unknown option: {option}")
 
+    return selected_extractors
+
+
+def get_requested_options_for_pdf(
+    pdf_path: Path,
+    global_requested_options: set[str] | None,
+    per_pdf_options: dict[str, set[str]],
+) -> set[str] | None:
+    pdf_keys = {
+        normalize_option_name(pdf_path.name),
+        normalize_option_name(str(pdf_path)),
+    }
+    for pdf_key in pdf_keys:
+        if pdf_key in per_pdf_options:
+            return per_pdf_options[pdf_key]
+    return global_requested_options
+
+
+def process_pdf(
+    pdf_path: Path,
+    requested_options: set[str] | None,
+    available_extractors: list[tuple[str, object]],
+) -> None:
+    job_start_time = time.perf_counter()
+    selected_extractors = select_extractors(requested_options, available_extractors)
+
     print(f"PDF: {pdf_path}")
     print(f"Selected extractors: {len(selected_extractors)}")
     sheet_rows = [
@@ -1066,11 +1313,46 @@ def main() -> None:
         print(f"Total time taken: {total_elapsed:.2f}s")
         return
 
-    write_workbook(found_sheet_rows, OUTPUT_XLSX)
+    output_path = build_output_path(pdf_path)
+    saved_output_path = write_workbook(found_sheet_rows, output_path)
     total_rows = sum(len(rows) for _, rows in found_sheet_rows)
     total_elapsed = time.perf_counter() - job_start_time
-    print(f"Extracted {total_rows} rows across {len(found_sheet_rows)} sheets to: {OUTPUT_XLSX}")
+    print(
+        f"Extracted {total_rows} rows across {len(found_sheet_rows)} sheets to: "
+        f"{saved_output_path}"
+    )
     print(f"Total time taken: {total_elapsed:.2f}s")
+
+
+def main() -> None:
+    pdf_paths, requests_file = resolve_runtime_paths()
+    global_requested_options, per_pdf_options = load_requested_options(requests_file)
+    available_extractors = get_available_extractors()
+
+    if requests_file is not None and per_pdf_options:
+        requested_pdf_paths = []
+        for raw_line in requests_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            pdf_name, _raw_options = line.split(":", 1)
+            requested_pdf_paths.append(resolve_pdf_path(Path(pdf_name.strip()), requests_file))
+
+        if len(pdf_paths) == 1 and pdf_paths[0] == PDF_PATH and requested_pdf_paths:
+            pdf_paths = requested_pdf_paths
+
+    for pdf_path in pdf_paths:
+        resolved_pdf_path = resolve_pdf_path(pdf_path, requests_file)
+        if not resolved_pdf_path.exists():
+            print(f"Skipping missing PDF: {resolved_pdf_path}")
+            continue
+
+        requested_options = get_requested_options_for_pdf(
+            resolved_pdf_path,
+            global_requested_options,
+            per_pdf_options,
+        )
+        process_pdf(resolved_pdf_path, requested_options, available_extractors)
 
 
 if __name__ == "__main__":
