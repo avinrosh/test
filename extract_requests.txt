@@ -1,0 +1,17 @@
+# Use one of these formats:
+# 1. Global options for a single PDF:
+#    Product Tables, OXX
+# 2. Per-PDF options for batch processing:
+#    Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf: Production Process, Table 1, Table 3 ASTM, Table 6, CI-4 Hardness, ISO VG 10, Fig 1 Temperatures
+#    prodTable.pdf: Product Tables, OXX
+#    testLubricant.pdf: Greases
+#    xyzLub.pdf: OXX
+#    ABB.pdf: ABB Greasing
+#
+# Multiple extractors can be separated with commas or semicolons.
+
+Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf: Production Process, Table 1, Table 3 ASTM, Table 6, CI-4 Hardness, ISO VG 10, Fig 1 Temperatures
+prodTable.pdf: Product Tables, OXX
+testLubricant.pdf: Greases
+xyzLub.pdf: OXX
+ABB.pdf: ABB Greasing

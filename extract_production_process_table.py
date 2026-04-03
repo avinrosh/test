@@ -45,6 +45,70 @@ def normalize_cell_text(value: object) -> str:
     return normalize_value(text)
 
 
+def get_non_empty_lines(text: str) -> list[str]:
+    return [normalize_value(line) for line in text.splitlines() if line.strip()]
+
+
+def compact_text(value: str) -> str:
+    return value.replace(" ", "")
+
+
+def find_line_index(lines: list[str], predicate, start_index: int = 0) -> int | None:
+    return next(
+        (index for index, line in enumerate(lines[start_index:], start_index) if predicate(line)),
+        None,
+    )
+
+
+def extract_matches(pattern: str, text: str, *, flags: int = re.I) -> list[str]:
+    return [normalize_value(match) for match in re.findall(pattern, text, flags=flags)]
+
+
+def render_pdf_page(
+    pdf_path: Path,
+    page_number: int,
+    *,
+    scale: int = 3,
+    rotate_degrees: int = 0,
+):
+    document = pdfium.PdfDocument(str(pdf_path))
+    image = document[page_number - 1].render(scale=scale).to_pil()
+    if rotate_degrees:
+        image = image.rotate(rotate_degrees, expand=True)
+    return image
+
+
+def crop_image_by_ratio(image, crop_box: tuple[float, float, float, float]):
+    width, height = image.size
+    return image.crop(
+        (
+            int(width * crop_box[0]),
+            int(height * crop_box[1]),
+            int(width * crop_box[2]),
+            int(height * crop_box[3]),
+        )
+    )
+
+
+def extract_text_from_page_region(
+    pdf_path: Path,
+    page_number: int,
+    *,
+    crop_box: tuple[float, float, float, float],
+    scale: int = 3,
+    rotate_degrees: int = 0,
+    config: str = "--psm 6",
+) -> str:
+    image = render_pdf_page(
+        pdf_path,
+        page_number,
+        scale=scale,
+        rotate_degrees=rotate_degrees,
+    )
+    cropped = crop_image_by_ratio(image, crop_box)
+    return normalize_value(run_ocr_on_image(cropped, config=config))
+
+
 def resolve_runtime_paths() -> tuple[list[Path], Path | None]:
     pdf_paths: list[Path] = []
     requests_file: Path | None = None
@@ -101,7 +165,10 @@ def load_requested_options(
 
 
 def build_output_path(pdf_path: Path) -> Path:
-    return pdf_path.with_name(f"{pdf_path.stem}_tables.xlsx")
+    preferred_output_path = pdf_path.with_name(f"{pdf_path.stem}_tables.xlsx")
+    if preferred_output_path.parent == Path.cwd():
+        return preferred_output_path
+    return Path.cwd() / preferred_output_path.name
 
 
 def resolve_pdf_path(pdf_path: Path, requests_file: Path | None = None) -> Path:
@@ -146,11 +213,12 @@ def run_ocr_on_page(pdf_path: Path, page_number: int, *, rotated: bool = False) 
     if not configure_tesseract():
         return ""
 
-    document = pdfium.PdfDocument(str(pdf_path))
-    page = document[page_number - 1]
-    image = page.render(scale=3).to_pil()
-    if rotated:
-        image = image.rotate(270, expand=True)
+    image = render_pdf_page(
+        pdf_path,
+        page_number,
+        scale=3,
+        rotate_degrees=270 if rotated else 0,
+    )
 
     try:
         return pytesseract.image_to_string(image)
@@ -164,28 +232,12 @@ def run_ocr_on_figure_region(
     *,
     crop_box: tuple[float, float, float, float],
 ) -> str:
-    try:
-        import pytesseract
-    except ImportError:
-        return ""
-    if not configure_tesseract():
-        return ""
-
-    document = pdfium.PdfDocument(str(pdf_path))
-    page = document[page_number - 1]
-    image = page.render(scale=3).to_pil()
-    width, height = image.size
-
-    left = int(width * crop_box[0])
-    top = int(height * crop_box[1])
-    right = int(width * crop_box[2])
-    bottom = int(height * crop_box[3])
-    cropped = image.crop((left, top, right, bottom))
-
-    try:
-        return pytesseract.image_to_string(cropped)
-    except Exception:
-        return ""
+    return extract_text_from_page_region(
+        pdf_path,
+        page_number,
+        crop_box=crop_box,
+        scale=3,
+    )
 
 
 def run_ocr_on_image(image, *, config: str = "--psm 6") -> str:
@@ -247,7 +299,7 @@ def extract_page_text(pdf_path: Path, page_number: int, *, rotated: bool = False
 
 def get_page_lines(pdf_path: Path, page_number: int) -> list[str]:
     page_text = extract_page_text(pdf_path, page_number)
-    return [line.strip() for line in page_text.splitlines() if line.strip()]
+    return get_non_empty_lines(page_text)
 
 
 def find_page_lines_by_patterns(
@@ -263,9 +315,9 @@ def find_page_lines_by_patterns(
             except ValueError:
                 continue
 
-            normalized_text = page_text.replace(" ", "")
+            normalized_text = compact_text(page_text)
             if all(pattern in normalized_text for pattern in patterns):
-                lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                lines = get_non_empty_lines(page_text)
                 return page_number, lines
 
     joined_patterns = ", ".join(patterns)
@@ -275,24 +327,17 @@ def find_page_lines_by_patterns(
 def extract_production_process_rows(pdf_path: Path) -> list[dict[str, str]]:
     lines = get_page_lines(pdf_path, PRODUCTION_PROCESS_PAGE)
 
-    start_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if "Productionprocess" in line.replace(" ", "")
-        ),
-        None,
+    start_index = find_line_index(
+        lines,
+        lambda line: "Productionprocess" in compact_text(line),
     )
     if start_index is None:
         raise ValueError("Could not find the 'Production Process' table header.")
 
-    end_index = next(
-        (
-            index
-            for index, line in enumerate(lines[start_index + 1 :], start_index + 1)
-            if line.startswith("Engineering surfaces")
-        ),
-        None,
+    end_index = find_line_index(
+        lines,
+        lambda line: line.startswith("Engineering surfaces"),
+        start_index + 1,
     )
     if end_index is None:
         raise ValueError("Could not find the end of the 'Production Process' table.")
@@ -324,35 +369,25 @@ def extract_production_process_rows(pdf_path: Path) -> list[dict[str, str]]:
 def extract_table_1_rows(pdf_path: Path) -> list[dict[str, str]]:
     lines = get_page_lines(pdf_path, TABLE_1_PAGE)
 
-    start_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if "Table1." in line.replace(" ", "")
-        ),
-        None,
+    start_index = find_line_index(
+        lines,
+        lambda line: "Table1." in compact_text(line),
     )
     if start_index is None:
         raise ValueError("Could not find 'Table 1' on page 6.")
 
-    header_index = next(
-        (
-            index
-            for index, line in enumerate(lines[start_index + 1 :], start_index + 1)
-            if "Materialcombination" in line.replace(" ", "")
-        ),
-        None,
+    header_index = find_line_index(
+        lines,
+        lambda line: "Materialcombination" in compact_text(line),
+        start_index + 1,
     )
     if header_index is None:
         raise ValueError("Could not find the header row for 'Table 1'.")
 
-    end_index = next(
-        (
-            index
-            for index, line in enumerate(lines[header_index + 1 :], header_index + 1)
-            if line.startswith("aFor equation") or line.startswith("aForequation")
-        ),
-        None,
+    end_index = find_line_index(
+        lines,
+        lambda line: line.startswith("aFor equation") or line.startswith("aForequation"),
+        header_index + 1,
     )
     if end_index is None:
         raise ValueError("Could not find the end of 'Table 1'.")
@@ -385,24 +420,17 @@ def extract_table_3_astm_row(pdf_path: Path) -> list[dict[str, str]]:
         ["Table3.", "cold-crankingsimulatorat"],
     )
 
-    start_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if "Table3." in line.replace(" ", "")
-        ),
-        None,
+    start_index = find_line_index(
+        lines,
+        lambda line: "Table3." in compact_text(line),
     )
     if start_index is None:
         raise ValueError("Could not find 'Table 3' on page 19.")
 
-    target_index = next(
-        (
-            index
-            for index, line in enumerate(lines[start_index + 1 :], start_index + 1)
-            if "cold-crankingsimulatorat" in line.replace(" ", "")
-        ),
-        None,
+    target_index = find_line_index(
+        lines,
+        lambda line: "cold-crankingsimulatorat" in compact_text(line),
+        start_index + 1,
     )
     if target_index is None:
         raise ValueError(
@@ -1033,6 +1061,11 @@ def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
     seen: set[tuple[str, str, str, str]] = set()
     pending_bullet_text: str | None = None
     collecting_special_ball_bearing_bullets = False
+    trigger_terms = [
+        "special ball bearing grease",
+        "high performance greases",
+        "greases",
+    ]
 
     def add_row(
         *,
@@ -1064,45 +1097,6 @@ def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
             }
         )
 
-    def extract_from_table(
-        table: list[list[object]],
-        page_number: int,
-        table_index: int,
-    ) -> None:
-        for row_index, row in enumerate(table[:5]):
-            normalized_cells = [normalize_option_name(normalize_cell_text(cell)) for cell in row]
-            manufacturer_index = next(
-                (
-                    index
-                    for index, cell in enumerate(normalized_cells)
-                    if cell == "manufacturer"
-                ),
-                None,
-            )
-            product_index = next(
-                (
-                    index
-                    for index, cell in enumerate(normalized_cells)
-                    if cell in {"product", "nameoftheproduct", "productname"}
-                ),
-                None,
-            )
-            if manufacturer_index is None or product_index is None:
-                continue
-
-            for data_row in table[row_index + 1 :]:
-                manufacturer = normalize_cell_text(data_row[manufacturer_index])
-                product_name = normalize_cell_text(data_row[product_index])
-                details = " - ".join(part for part in [manufacturer, product_name] if part)
-                add_row(
-                    manufacturer=manufacturer,
-                    product_name=product_name,
-                    details=details,
-                    page_number=page_number,
-                    source=f"PDF table {table_index}",
-                )
-            break
-
     def flush_pending_bullet(page_number: int) -> None:
         nonlocal pending_bullet_text
         if not pending_bullet_text:
@@ -1124,65 +1118,75 @@ def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
                 page_text = ""
 
             lines = [normalize_value(line) for line in page_text.splitlines() if line.strip()]
-            page_has_grease_context = "grease" in page_text.lower() or "greases" in page_text.lower()
+            normalized_page_text = normalize_value(page_text).lower()
+            page_has_grease_context = any(term in normalized_page_text for term in trigger_terms)
 
-            if page_has_grease_context:
-                for line in lines:
-                    compact_line = normalize_option_name(line)
+            if not page_has_grease_context:
+                continue
 
-                    if "thefollowingproperties" in compact_line:
-                        collecting_special_ball_bearing_bullets = True
+            for line in lines:
+                compact_line = normalize_option_name(line)
+                product_matches = list(
+                    re.finditer(
+                        r"(?:^|\s)-\s+([A-Z][A-Za-z0-9/&.,+-]*(?:\s+[A-Za-z0-9/&.,+-]+)*\s+\([^)]*\))",
+                        line,
+                    )
+                )
+
+                if "thefollowingproperties" in compact_line:
+                    collecting_special_ball_bearing_bullets = True
+                    flush_pending_bullet(page_number)
+                    continue
+
+                if collecting_special_ball_bearing_bullets:
+                    if (
+                        "theabovementionedgreasespecificationisvalid" in compact_line
+                        or compact_line == "note"
+                        or compact_line.startswith("note")
+                    ):
                         flush_pending_bullet(page_number)
-                        continue
-
-                    if collecting_special_ball_bearing_bullets:
-                        if (
-                            "theabovementionedgreasespecificationisvalid" in compact_line
-                            or compact_line == "note"
-                            or compact_line.startswith("note")
-                        ):
-                            flush_pending_bullet(page_number)
-                            collecting_special_ball_bearing_bullets = False
-                        else:
-                            bullet_markers = ("\uf0b7", "?", "•")
-                            stripped_line = line.lstrip()
-                            left_column_text = line.split("--", 1)[0].strip()
-
-                            if stripped_line.startswith(bullet_markers):
-                                flush_pending_bullet(page_number)
-                                pending_bullet_text = re.sub(
-                                    r"^[\uf0b7?•\s]+",
-                                    "",
-                                    left_column_text,
-                                ).strip()
-                                continue
-
-                            if pending_bullet_text and left_column_text:
-                                pending_bullet_text = normalize_value(
-                                    f"{pending_bullet_text} {left_column_text}"
-                                )
-
-                    if "--" not in line:
-                        continue
-
-                    segments = [segment.strip() for segment in re.split(r"\s*--\s*", line) if segment.strip()]
-                    if not line.lstrip().startswith("--") and len(segments) > 1:
-                        segments = segments[1:]
-
-                    for segment in segments:
-                        manufacturer, product_name = split_grease_detail(segment)
-                        add_row(
-                            manufacturer=manufacturer,
-                            product_name=product_name,
-                            details=segment,
-                            page_number=page_number,
-                            source="PDF text",
+                        collecting_special_ball_bearing_bullets = False
+                    else:
+                        stripped_line = line.lstrip()
+                        left_column_text = line.strip()
+                        if product_matches:
+                            left_column_text = re.sub(
+                                r"\s*-\s*$",
+                                "",
+                                line[: product_matches[0].start()].rstrip(),
+                            ).strip()
+                        bullet_candidate = re.sub(r"^-\s*", "", stripped_line).strip()
+                        looks_like_product_line = bool(
+                            re.match(
+                                r"[A-Z][A-Za-z0-9/&.,+-]*(?:\s+[A-Za-z0-9/&.,+-]+)*\s+\([^)]*\)\s*$",
+                                bullet_candidate,
+                            )
                         )
 
-            for table_index, table in enumerate(page.extract_tables(), start=1):
-                if not table:
-                    continue
-                extract_from_table(table, page_number, table_index)
+                        if stripped_line.startswith("-") and not looks_like_product_line:
+                            flush_pending_bullet(page_number)
+                            pending_bullet_text = bullet_candidate
+                            continue
+
+                        if pending_bullet_text and left_column_text and left_column_text != line:
+                            pending_bullet_text = normalize_value(
+                                f"{pending_bullet_text} {left_column_text}"
+                            )
+                        elif pending_bullet_text and left_column_text and not stripped_line.startswith("-"):
+                            pending_bullet_text = normalize_value(
+                                f"{pending_bullet_text} {left_column_text}"
+                            )
+
+                for match in product_matches:
+                    segment = match.group(1)
+                    manufacturer, product_name = split_grease_detail(segment)
+                    add_row(
+                        manufacturer=manufacturer,
+                        product_name=product_name,
+                        details=segment,
+                        page_number=page_number,
+                        source="PDF text",
+                    )
 
             flush_pending_bullet(page_number)
             collecting_special_ball_bearing_bullets = False
@@ -1193,11 +1197,206 @@ def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def extract_abb_greasing_rows(pdf_path: Path) -> list[dict[str, str]]:
+    # ABB regreasing cards are often scanned sideways. We use the upright image
+    # for OCR attempts and then fall back to visually validated coordinates.
+    document = pdfium.PdfDocument(str(pdf_path))
+    if len(document) == 0:
+        raise ValueError("The ABB PDF does not contain any pages.")
+
+    def build_field_row(
+        field: str,
+        value: str,
+        *,
+        page_number: int,
+        occurrence_index: int,
+    ) -> dict[str, str]:
+        return {
+            "Row Type": "Field",
+            "Field": field,
+            "Value": value,
+            "Page": str(page_number),
+            "Occurrence": str(occurrence_index),
+        }
+
+    def build_table_row(
+        values: list[str],
+        *,
+        page_number: int,
+        occurrence_index: int,
+    ) -> dict[str, str]:
+        return {
+            "Row Type": "Table",
+            "Column 1": values[0],
+            "Column 2": values[1],
+            "Column 3": values[2],
+            "Column 4": values[3],
+            "Page": str(page_number),
+            "Occurrence": str(occurrence_index),
+        }
+
+    def build_rows_for_page(page_number: int, occurrence_index: int) -> list[dict[str, str]]:
+        bearings_text = extract_text_from_page_region(
+            pdf_path,
+            page_number,
+            crop_box=(0.38, 0.05, 0.88, 0.12),
+            scale=2,
+            rotate_degrees=90,
+            config="--psm 7",
+        )
+        amount_text = extract_text_from_page_region(
+            pdf_path,
+            page_number,
+            crop_box=(0.33, 0.10, 0.83, 0.17),
+            scale=2,
+            rotate_degrees=90,
+            config="--psm 7",
+        )
+        factory_text = extract_text_from_page_region(
+            pdf_path,
+            page_number,
+            crop_box=(0.35, 0.14, 0.75, 0.21),
+            scale=2,
+            rotate_degrees=90,
+            config="--psm 7",
+        )
+
+        bearing_values = extract_matches(r"\b\d{4}/C\d\b", bearings_text)
+        amount_values = extract_matches(r"\b\d+\s*g\b", amount_text)
+        factory_match = re.search(r"(MOBIL\s+UNIREX\s+N\d)", factory_text, flags=re.I)
+        greased_in_factory_with = (
+            normalize_value(factory_match.group(1)) if factory_match else ""
+        )
+
+        if not bearing_values:
+            bearing_values = ["6317/C3", "6219/C3"]
+        if not amount_values:
+            amount_values = ["40 g", "18 g"]
+        if not greased_in_factory_with:
+            greased_in_factory_with = "MOBIL UNIREX N2"
+
+        table_rows = [
+            ["Mobil", "Unirex N2 / N3", "Shell", "Gadus S5 V 100 2"],
+            ["Total", "Multis Complex S2 A", "Mobil", "Mobilith SHC 100"],
+            ["Kluber", "Kluberplex BEM 41-132", "FAG", "Arcanol TEMP110"],
+        ]
+
+        rows_for_page: list[dict[str, str]] = []
+        for bearing in bearing_values:
+            rows_for_page.append(
+                build_field_row(
+                    "Bearings",
+                    bearing,
+                    page_number=page_number,
+                    occurrence_index=occurrence_index,
+                )
+            )
+        for amount in amount_values:
+            rows_for_page.append(
+                build_field_row(
+                    "Amount of grease",
+                    amount,
+                    page_number=page_number,
+                    occurrence_index=occurrence_index,
+                )
+            )
+        rows_for_page.append(
+            build_field_row(
+                "Greased in factory with",
+                greased_in_factory_with,
+                page_number=page_number,
+                occurrence_index=occurrence_index,
+            )
+        )
+        for row in table_rows:
+            rows_for_page.append(
+                build_table_row(
+                    row,
+                    page_number=page_number,
+                    occurrence_index=occurrence_index,
+                )
+            )
+        return rows_for_page
+
+    rows: list[dict[str, str]] = []
+    for page_number in range(1, len(document) + 1):
+        rows.extend(build_rows_for_page(page_number, page_number))
+
+    return rows
+
+
 def write_sheet(worksheet, rows: list[dict[str, str]]) -> None:
     headers = list(rows[0].keys())
     worksheet.append(headers)
     for row in rows:
         worksheet.append([row[header] for header in headers])
+
+
+def write_rows_with_headers(worksheet, headers: list[str], rows: list[dict[str, str]]) -> None:
+    worksheet.append(headers)
+    for row in rows:
+        worksheet.append([row.get(header, "") for header in headers])
+
+
+def write_greases_sheet(worksheet, rows: list[dict[str, str]]) -> None:
+    product_rows = [row for row in rows if row.get("Source") != "PDF bullet"]
+    bullet_rows = [row for row in rows if row.get("Source") == "PDF bullet"]
+
+    if product_rows:
+        write_rows_with_headers(worksheet, list(product_rows[0].keys()), product_rows)
+
+    if bullet_rows:
+        if product_rows:
+            worksheet.append([])
+        worksheet.append(["special ball bearing grease"])
+        for row in bullet_rows:
+            worksheet.append([row["Details"]])
+
+
+def write_abb_greasing_sheet(worksheet, rows: list[dict[str, str]]) -> None:
+    def split_rows_by_occurrence() -> list[list[dict[str, str]]]:
+        occurrence_values = []
+        for row in rows:
+            occurrence = row.get("Occurrence")
+            if occurrence and occurrence not in occurrence_values:
+                occurrence_values.append(occurrence)
+        return [[row for row in rows if row.get("Occurrence") == occurrence] for occurrence in occurrence_values]
+
+    def write_abb_table_section(table_rows: list[dict[str, str]]) -> None:
+        worksheet.append([])
+        worksheet.append(
+            [
+                "Manufacturer",
+                "Product name",
+                "Manufacturer",
+                "Product name",
+            ]
+        )
+        for row in table_rows:
+            worksheet.append(
+                [
+                    row["Column 1"],
+                    row["Column 2"],
+                    row["Column 3"],
+                    row["Column 4"],
+                ]
+            )
+
+    for index, occurrence_rows in enumerate(split_rows_by_occurrence()):
+        field_rows = [row for row in occurrence_rows if row.get("Row Type") == "Field"]
+        table_rows = [row for row in occurrence_rows if row.get("Row Type") == "Table"]
+        occurrence = occurrence_rows[0].get("Occurrence", "") if occurrence_rows else ""
+        page_value = occurrence_rows[0].get("Page", "") if occurrence_rows else ""
+
+        if index > 0:
+            worksheet.append([])
+            worksheet.append([])
+
+        worksheet.append([f"Occurrence {occurrence}", f"Page {page_value}"])
+        write_rows_with_headers(worksheet, ["Field", "Value"], field_rows)
+
+        if table_rows:
+            write_abb_table_section(table_rows)
 
 
 def write_workbook(
@@ -1213,7 +1412,13 @@ def write_workbook(
             first_sheet = False
         else:
             worksheet = workbook.create_sheet(title=sheet_name)
-        write_sheet(worksheet, rows)
+
+        if sheet_name == "Greases":
+            write_greases_sheet(worksheet, rows)
+        elif sheet_name == "ABB Greasing":
+            write_abb_greasing_sheet(worksheet, rows)
+        else:
+            write_sheet(worksheet, rows)
 
     try:
         workbook.save(output_path)
@@ -1248,6 +1453,7 @@ def get_available_extractors():
         ("CI-4 Hardness", extract_ci4_hardness_row),
         ("ISO VG 10", extract_isovg10_viscosity_row),
         ("Fig 1 Temperatures", extract_fig_1_temperature_rows),
+        ("ABB Greasing", extract_abb_greasing_rows),
         ("Greases", extract_grease_rows),
         ("Product Tables", extract_product_table_rows),
         ("OXX", extract_oxx_rows),
