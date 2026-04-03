@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sys
@@ -8,13 +9,15 @@ from pathlib import Path
 
 import pdfplumber
 import pypdfium2 as pdfium
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 
 PDF_PATH = Path(
     r"d:\App\pdfscrapper\testTable.pdf"
 )
 REQUESTS_FILE = Path(r"d:\App\pdfscrapper\extract_requests.txt")
+HISTORY_FILE = Path(r"d:\App\pdfscrapper\extraction_history.json")
+FEEDBACK_FILE = Path(r"d:\App\pdfscrapper\feedback_history.json")
 DEFAULT_TESSERACT_PATHS = [
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
     Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
@@ -90,6 +93,33 @@ def crop_image_by_ratio(image, crop_box: tuple[float, float, float, float]):
     )
 
 
+def calculate_color_density(
+    image,
+    crop_box: tuple[float, float, float, float],
+    *,
+    min_channel_delta: int = 25,
+    min_brightness: int = 100,
+) -> float:
+    cropped = crop_image_by_ratio(image.convert("RGB"), crop_box)
+    total_pixels = cropped.width * cropped.height
+    if total_pixels == 0:
+        return 0.0
+
+    colored_pixels = 0
+    pixels = cropped.load()
+    for y in range(cropped.height):
+        for x in range(cropped.width):
+            red, green, blue = pixels[x, y]
+            if max(red, green, blue) - min(red, green, blue) >= min_channel_delta and max(
+                red,
+                green,
+                blue,
+            ) >= min_brightness:
+                colored_pixels += 1
+
+    return colored_pixels / total_pixels
+
+
 def extract_text_from_page_region(
     pdf_path: Path,
     page_number: int,
@@ -109,9 +139,403 @@ def extract_text_from_page_region(
     return normalize_value(run_ocr_on_image(cropped, config=config))
 
 
-def resolve_runtime_paths() -> tuple[list[Path], Path | None]:
+def tokenize_text(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) >= 3 and not token.isdigit()
+    }
+
+
+def build_text_snippet(text: str, *, max_words: int = 80) -> str:
+    words = normalize_value(text).split()
+    return " ".join(words[:max_words])
+
+
+def safe_extract_page_text(pdf_path: Path, page_number: int, *, rotated: bool = False) -> str:
+    try:
+        return extract_page_text(pdf_path, page_number, rotated=rotated)
+    except Exception:
+        return ""
+
+
+def get_pdf_page_texts(pdf_path: Path) -> list[dict[str, str]]:
+    with pdfplumber.open(pdf_path) as pdf:
+        page_count = len(pdf.pages)
+
+    page_texts: list[dict[str, str]] = []
+    for page_number in range(1, page_count + 1):
+        text = safe_extract_page_text(pdf_path, page_number)
+        page_texts.append(
+            {
+                "page": str(page_number),
+                "text": text,
+                "normalized": normalize_value(text).lower(),
+            }
+        )
+    return page_texts
+
+
+def load_history(history_file: Path) -> dict:
+    if not history_file.exists():
+        return {"examples": []}
+    try:
+        return json.loads(history_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"examples": []}
+
+
+def save_history(history_file: Path, history: dict) -> None:
+    history_file.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+
+def load_feedback_memory(feedback_file: Path) -> dict:
+    if not feedback_file.exists():
+        return {"confirmations": [], "corrections": []}
+    try:
+        return json.loads(feedback_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"confirmations": [], "corrections": []}
+
+
+def save_feedback_memory(feedback_file: Path, feedback_memory: dict) -> None:
+    feedback_file.write_text(json.dumps(feedback_memory, indent=2), encoding="utf-8")
+
+
+def build_feedback_key(sheet_name: str, field_name: str, value: str) -> str:
+    return "||".join(
+        [
+            normalize_option_name(sheet_name),
+            normalize_option_name(field_name),
+            normalize_value(value).lower(),
+        ]
+    )
+
+
+def determine_review_field(row: dict[str, str]) -> str:
+    preferred_fields = [
+        "Value",
+        "Details",
+        "Product name",
+        "ASTM",
+        "Manufacturer",
+    ]
+    for field_name in preferred_fields:
+        if field_name in row:
+            return field_name
+
+    business_fields = [
+        key
+        for key in row.keys()
+        if key not in {"Human Evaluation", "Review Field", "Source", "Page", "Occurrence", "Row Type"}
+    ]
+    return business_fields[-1] if business_fields else ""
+
+
+def add_human_evaluation_column(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    reviewed_rows: list[dict[str, str]] = []
+    for row in rows:
+        reviewed_row = dict(row)
+        reviewed_row.setdefault("Review Field", determine_review_field(reviewed_row))
+        reviewed_row.setdefault("Human Evaluation", "")
+        reviewed_rows.append(reviewed_row)
+    return reviewed_rows
+
+
+def apply_feedback_to_rows(
+    sheet_name: str,
+    rows: list[dict[str, str]],
+    feedback_memory: dict,
+) -> list[dict[str, str]]:
+    corrected_rows: list[dict[str, str]] = []
+    correction_map = {
+        correction["key"]: correction["corrected_value"]
+        for correction in feedback_memory.get("corrections", [])
+        if correction.get("key") and correction.get("corrected_value") is not None
+    }
+
+    for row in rows:
+        corrected_row = dict(row)
+        for field_name, value in list(corrected_row.items()):
+            if field_name in {"Human Evaluation", "Source", "Page", "Occurrence", "Row Type"}:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            feedback_key = build_feedback_key(sheet_name, field_name, value)
+            if feedback_key in correction_map:
+                corrected_row[field_name] = correction_map[feedback_key]
+        corrected_rows.append(corrected_row)
+
+    return add_human_evaluation_column(corrected_rows)
+
+
+def ingest_feedback_workbook(workbook_path: Path, feedback_memory: dict) -> int:
+    workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+    updates = 0
+    seen_confirmations = {
+        entry["key"] for entry in feedback_memory.get("confirmations", []) if entry.get("key")
+    }
+    seen_corrections = {
+        entry["key"] for entry in feedback_memory.get("corrections", []) if entry.get("key")
+    }
+
+    for sheet_name in workbook.sheetnames:
+        worksheet = workbook[sheet_name]
+        rows = list(worksheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        row_index = 0
+        while row_index < len(rows):
+            row = rows[row_index]
+            normalized_row = [
+                normalize_value(str(cell)) if cell is not None else ""
+                for cell in row
+            ]
+            if "Human Evaluation" not in normalized_row:
+                row_index += 1
+                continue
+
+            headers = normalized_row
+            evaluation_index = headers.index("Human Evaluation")
+            review_field_index = headers.index("Review Field") if "Review Field" in headers else None
+            candidate_field_indexes = [
+                index
+                for index, header in enumerate(headers)
+                if header and header not in {"Human Evaluation", "Review Field"}
+            ]
+            row_index += 1
+
+            while row_index < len(rows):
+                data_row = rows[row_index]
+                normalized_data_row = [
+                    normalize_value(str(cell)) if cell is not None else ""
+                    for cell in data_row
+                ]
+                if not any(normalized_data_row):
+                    row_index += 1
+                    break
+                if "Human Evaluation" in normalized_data_row:
+                    break
+
+                evaluation_value = (
+                    normalized_data_row[evaluation_index]
+                    if evaluation_index < len(normalized_data_row)
+                    else ""
+                )
+                if evaluation_value:
+                    field_index = None
+                    review_field_name = ""
+                    if review_field_index is not None and review_field_index < len(normalized_data_row):
+                        review_field_name = normalized_data_row[review_field_index]
+                    if review_field_name and review_field_name in headers:
+                        candidate_index = headers.index(review_field_name)
+                        if candidate_index < len(normalized_data_row) and normalized_data_row[candidate_index]:
+                            field_index = candidate_index
+                    if field_index is None:
+                        field_index = next(
+                            (
+                                index
+                                for index in candidate_field_indexes
+                                if index < len(normalized_data_row) and normalized_data_row[index]
+                            ),
+                            None,
+                        )
+                    if field_index is not None:
+                        original_value = normalized_data_row[field_index]
+                        field_name = headers[field_index]
+                        feedback_key = build_feedback_key(sheet_name, field_name, original_value)
+
+                        if evaluation_value.lower() == "correct":
+                            if feedback_key not in seen_confirmations:
+                                feedback_memory.setdefault("confirmations", []).append(
+                                    {
+                                        "key": feedback_key,
+                                        "sheet": sheet_name,
+                                        "field": field_name,
+                                        "value": original_value,
+                                    }
+                                )
+                                seen_confirmations.add(feedback_key)
+                                updates += 1
+                        elif review_field_index is not None and feedback_key not in seen_corrections:
+                            feedback_memory.setdefault("corrections", []).append(
+                                {
+                                    "key": feedback_key,
+                                    "sheet": sheet_name,
+                                    "field": field_name,
+                                    "original_value": original_value,
+                                    "corrected_value": evaluation_value,
+                                }
+                            )
+                            seen_corrections.add(feedback_key)
+                            updates += 1
+
+                row_index += 1
+
+    return updates
+
+
+def discover_feedback_workbooks(feedback_workbooks: list[Path]) -> list[Path]:
+    discovered = {resolve_pdf_path(path) for path in feedback_workbooks}
+    for workbook_path in Path.cwd().glob("*_tables.xlsx"):
+        discovered.add(workbook_path.resolve())
+    for workbook_path in Path.cwd().glob("*_tables_updated.xlsx"):
+        discovered.add(workbook_path.resolve())
+    return sorted(discovered)
+
+
+def infer_relevant_pages(
+    rows: list[dict[str, str]],
+    page_texts: list[dict[str, str]],
+    extractor_name: str,
+) -> list[int]:
+    explicit_pages = sorted(
+        {
+            int(row["Page"])
+            for row in rows
+            if str(row.get("Page", "")).isdigit()
+        }
+    )
+    if explicit_pages:
+        return explicit_pages
+
+    candidate_terms = set(tokenize_text(extractor_name))
+    for row in rows[:5]:
+        for key, value in row.items():
+            if key.lower() in {"source", "row type", "occurrence", "human evaluation"}:
+                continue
+            text = normalize_value(str(value))
+            if len(text) < 4:
+                continue
+            candidate_terms.update(tokenize_text(text))
+
+    scored_pages: list[tuple[int, int]] = []
+    for page_info in page_texts:
+        page_tokens = tokenize_text(page_info["normalized"])
+        overlap = len(candidate_terms & page_tokens)
+        if overlap > 0:
+            scored_pages.append((int(page_info["page"]), overlap))
+
+    scored_pages.sort(key=lambda item: item[1], reverse=True)
+    return [page for page, _score in scored_pages[:2]]
+
+
+def update_history_with_extraction(
+    history: dict,
+    pdf_path: Path,
+    extractor_name: str,
+    rows: list[dict[str, str]],
+) -> None:
+    if not rows:
+        return
+
+    page_texts = get_pdf_page_texts(pdf_path)
+    relevant_pages = infer_relevant_pages(rows, page_texts, extractor_name)
+    if not relevant_pages:
+        return
+
+    examples = history.setdefault("examples", [])
+    existing_keys = {
+        (
+            example.get("extractor"),
+            example.get("pdf_name"),
+            example.get("page"),
+            example.get("snippet"),
+        )
+        for example in examples
+    }
+
+    for page_number in relevant_pages:
+        page_info = next(
+            (item for item in page_texts if int(item["page"]) == page_number),
+            None,
+        )
+        if page_info is None or not page_info["normalized"]:
+            continue
+
+        snippet = build_text_snippet(page_info["text"])
+        example = {
+            "extractor": extractor_name,
+            "pdf_name": pdf_path.name,
+            "page": str(page_number),
+            "snippet": snippet,
+        }
+        example_key = (
+            example["extractor"],
+            example["pdf_name"],
+            example["page"],
+            example["snippet"],
+        )
+        if example_key in existing_keys:
+            continue
+        examples.append(example)
+        existing_keys.add(example_key)
+
+
+def score_page_against_history(page_text: str, examples: list[dict]) -> tuple[float, int]:
+    page_tokens = tokenize_text(page_text)
+    if not page_tokens:
+        return 0.0, 0
+
+    best_score = 0.0
+    best_overlap = 0
+    for example in examples:
+        snippet_tokens = tokenize_text(example.get("snippet", ""))
+        if not snippet_tokens:
+            continue
+        overlap_tokens = page_tokens & snippet_tokens
+        overlap = len(overlap_tokens)
+        if overlap == 0:
+            continue
+        union_size = len(page_tokens | snippet_tokens)
+        score = overlap / union_size if union_size else 0.0
+        if score > best_score or (score == best_score and overlap > best_overlap):
+            best_score = score
+            best_overlap = overlap
+
+    return best_score, best_overlap
+
+
+def recommend_extractors_for_pdf(
+    pdf_path: Path,
+    history: dict,
+    available_extractors: list[tuple[str, object]],
+) -> tuple[set[str] | None, list[tuple[str, float, int]]]:
+    examples = history.get("examples", [])
+    if not examples:
+        return None, []
+
+    page_texts = get_pdf_page_texts(pdf_path)
+    available_names = {sheet_name for sheet_name, _extractor in available_extractors}
+    grouped_examples: dict[str, list[dict]] = {}
+    for example in examples:
+        extractor_name = example.get("extractor")
+        if extractor_name in available_names:
+            grouped_examples.setdefault(extractor_name, []).append(example)
+
+    recommendations: list[tuple[str, float, int]] = []
+    for extractor_name, extractor_examples in grouped_examples.items():
+        best_score = 0.0
+        best_overlap = 0
+        for page_info in page_texts:
+            score, overlap = score_page_against_history(page_info["text"], extractor_examples)
+            if score > best_score or (score == best_score and overlap > best_overlap):
+                best_score = score
+                best_overlap = overlap
+
+        if best_score >= 0.08 and best_overlap >= 2:
+            recommendations.append((extractor_name, best_score, best_overlap))
+
+    recommendations.sort(key=lambda item: (item[1], item[2]), reverse=True)
+    recommended_names = {name for name, _score, _overlap in recommendations[:4]}
+    return recommended_names or None, recommendations
+
+
+def resolve_runtime_paths() -> tuple[list[Path], Path | None, list[Path]]:
     pdf_paths: list[Path] = []
     requests_file: Path | None = None
+    feedback_workbooks: list[Path] = []
 
     for argument in sys.argv[1:]:
         candidate = Path(argument)
@@ -119,6 +543,8 @@ def resolve_runtime_paths() -> tuple[list[Path], Path | None]:
             pdf_paths.append(candidate)
         elif candidate.suffix.lower() == ".txt":
             requests_file = candidate
+        elif candidate.suffix.lower() == ".xlsx":
+            feedback_workbooks.append(candidate)
 
     if requests_file is None and REQUESTS_FILE.exists():
         requests_file = REQUESTS_FILE
@@ -126,7 +552,7 @@ def resolve_runtime_paths() -> tuple[list[Path], Path | None]:
     if not pdf_paths:
         pdf_paths = [PDF_PATH]
 
-    return pdf_paths, requests_file
+    return pdf_paths, requests_file, feedback_workbooks
 
 
 def split_request_options(value: str) -> set[str]:
@@ -1215,6 +1641,7 @@ def extract_abb_greasing_rows(pdf_path: Path) -> list[dict[str, str]]:
             "Row Type": "Field",
             "Field": field,
             "Value": value,
+            "Review Field": "Value",
             "Page": str(page_number),
             "Occurrence": str(occurrence_index),
         }
@@ -1231,9 +1658,21 @@ def extract_abb_greasing_rows(pdf_path: Path) -> list[dict[str, str]]:
             "Column 2": values[1],
             "Column 3": values[2],
             "Column 4": values[3],
+            "Review Field": "Column 2",
             "Page": str(page_number),
             "Occurrence": str(occurrence_index),
         }
+
+    def is_abb_greasing_page(page_number: int) -> bool:
+        page_image = render_pdf_page(
+            pdf_path,
+            page_number,
+            scale=1,
+            rotate_degrees=90,
+        )
+        top_density = calculate_color_density(page_image, (0.30, 0.08, 0.85, 0.20))
+        table_density = calculate_color_density(page_image, (0.00, 0.52, 0.85, 0.68))
+        return top_density >= 0.03 and table_density >= 0.03
 
     def build_rows_for_page(page_number: int, occurrence_index: int) -> list[dict[str, str]]:
         bearings_text = extract_text_from_page_region(
@@ -1319,8 +1758,15 @@ def extract_abb_greasing_rows(pdf_path: Path) -> list[dict[str, str]]:
         return rows_for_page
 
     rows: list[dict[str, str]] = []
+    occurrence_index = 1
     for page_number in range(1, len(document) + 1):
-        rows.extend(build_rows_for_page(page_number, page_number))
+        if not is_abb_greasing_page(page_number):
+            continue
+        rows.extend(build_rows_for_page(page_number, occurrence_index))
+        occurrence_index += 1
+
+    if not rows:
+        raise ValueError("Could not find any ABB greasing cards in the PDF.")
 
     return rows
 
@@ -1348,9 +1794,15 @@ def write_greases_sheet(worksheet, rows: list[dict[str, str]]) -> None:
     if bullet_rows:
         if product_rows:
             worksheet.append([])
-        worksheet.append(["special ball bearing grease"])
+        worksheet.append(["special ball bearing grease", "Review Field", "Human Evaluation"])
         for row in bullet_rows:
-            worksheet.append([row["Details"]])
+            worksheet.append(
+                [
+                    row["Details"],
+                    row.get("Review Field", ""),
+                    row.get("Human Evaluation", ""),
+                ]
+            )
 
 
 def write_abb_greasing_sheet(worksheet, rows: list[dict[str, str]]) -> None:
@@ -1370,6 +1822,8 @@ def write_abb_greasing_sheet(worksheet, rows: list[dict[str, str]]) -> None:
                 "Product name",
                 "Manufacturer",
                 "Product name",
+                "Review Field",
+                "Human Evaluation",
             ]
         )
         for row in table_rows:
@@ -1379,6 +1833,8 @@ def write_abb_greasing_sheet(worksheet, rows: list[dict[str, str]]) -> None:
                     row["Column 2"],
                     row["Column 3"],
                     row["Column 4"],
+                    row.get("Review Field", ""),
+                    row.get("Human Evaluation", ""),
                 ]
             )
 
@@ -1393,7 +1849,11 @@ def write_abb_greasing_sheet(worksheet, rows: list[dict[str, str]]) -> None:
             worksheet.append([])
 
         worksheet.append([f"Occurrence {occurrence}", f"Page {page_value}"])
-        write_rows_with_headers(worksheet, ["Field", "Value"], field_rows)
+        write_rows_with_headers(
+            worksheet,
+            ["Field", "Value", "Review Field", "Human Evaluation"],
+            field_rows,
+        )
 
         if table_rows:
             write_abb_table_section(table_rows)
@@ -1501,7 +1961,8 @@ def process_pdf(
     pdf_path: Path,
     requested_options: set[str] | None,
     available_extractors: list[tuple[str, object]],
-) -> None:
+    feedback_memory: dict,
+) -> list[tuple[str, list[dict[str, str]]]]:
     job_start_time = time.perf_counter()
     selected_extractors = select_extractors(requested_options, available_extractors)
 
@@ -1517,23 +1978,38 @@ def process_pdf(
         total_elapsed = time.perf_counter() - job_start_time
         print("No details were found.")
         print(f"Total time taken: {total_elapsed:.2f}s")
-        return
+        return []
 
+    reviewed_sheet_rows = [
+        (sheet_name, apply_feedback_to_rows(sheet_name, rows, feedback_memory))
+        for sheet_name, rows in found_sheet_rows
+    ]
     output_path = build_output_path(pdf_path)
-    saved_output_path = write_workbook(found_sheet_rows, output_path)
-    total_rows = sum(len(rows) for _, rows in found_sheet_rows)
+    saved_output_path = write_workbook(reviewed_sheet_rows, output_path)
+    total_rows = sum(len(rows) for _, rows in reviewed_sheet_rows)
     total_elapsed = time.perf_counter() - job_start_time
     print(
         f"Extracted {total_rows} rows across {len(found_sheet_rows)} sheets to: "
         f"{saved_output_path}"
     )
     print(f"Total time taken: {total_elapsed:.2f}s")
+    return reviewed_sheet_rows
 
 
 def main() -> None:
-    pdf_paths, requests_file = resolve_runtime_paths()
+    pdf_paths, requests_file, feedback_workbooks = resolve_runtime_paths()
     global_requested_options, per_pdf_options = load_requested_options(requests_file)
+    history = load_history(HISTORY_FILE)
+    feedback_memory = load_feedback_memory(FEEDBACK_FILE)
     available_extractors = get_available_extractors()
+
+    feedback_updates = 0
+    for workbook_path in discover_feedback_workbooks(feedback_workbooks):
+        if not workbook_path.exists():
+            continue
+        feedback_updates += ingest_feedback_workbook(workbook_path, feedback_memory)
+    if feedback_updates:
+        print(f"Learned {feedback_updates} feedback updates from reviewed Excel files.")
 
     if requests_file is not None and per_pdf_options:
         requested_pdf_paths = []
@@ -1558,7 +2034,32 @@ def main() -> None:
             global_requested_options,
             per_pdf_options,
         )
-        process_pdf(resolved_pdf_path, requested_options, available_extractors)
+        if requested_options is None:
+            recommended_options, recommendations = recommend_extractors_for_pdf(
+                resolved_pdf_path,
+                history,
+                available_extractors,
+            )
+            if recommended_options:
+                requested_options = {
+                    normalize_option_name(option) for option in recommended_options
+                }
+                recommendation_text = ", ".join(
+                    f"{name} ({score:.2f})" for name, score, _overlap in recommendations[:4]
+                )
+                print(f"Recommended extractors from history: {recommendation_text}")
+
+        found_sheet_rows = process_pdf(
+            resolved_pdf_path,
+            requested_options,
+            available_extractors,
+            feedback_memory,
+        )
+        for sheet_name, rows in found_sheet_rows:
+            update_history_with_extraction(history, resolved_pdf_path, sheet_name, rows)
+
+    save_history(HISTORY_FILE, history)
+    save_feedback_memory(FEEDBACK_FILE, feedback_memory)
 
 
 if __name__ == "__main__":
