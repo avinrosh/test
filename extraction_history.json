@@ -1,0 +1,94 @@
+{
+  "examples": [
+    {
+      "extractor": "Production Process",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "4",
+      "snippet": "4 LUBRICATIONANDLUBRICANTS TestDisk,AISI52100Steel,62(cid:6)1HRCHardness.Thesurfacesofthedisk are lapped and free oflapping raw materials. The topography of the disk will be determined by four values: 0.005mm<R >0.65mm; 0.035mm<R >0.050mm; z a 0.020mm<R >0.035mm; 0.050mm<R >0.075mm. p v Four different measures of surface topography are specified for the disk in order to get acceptable reproducibility of the test method (9). Approximate roughness indexes obtained with various metalworking pro- cesses are as follows: Productionprocess R,mm R ,mm t a turning 4.00-25.0 0.500-3.0 grinding 2.00-6.0 0.400-0.8 milling"
+    },
+    {
+      "extractor": "Production Process",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "44",
+      "snippet": "44 LUBRICATIONANDLUBRICANTS Table16. RequirementsforTypeIIITurbineOils Property Testmethod ISOviscositygrade D2422 32 46 flashpoint, C, D-92 200min 200min pourpoint, C D-97 ^-6max ^-9max watercontent,mass% D6304 0.02max 0.02max airrelease,50 C,minutes D3427 5max 5max foamingcharacteristics SEQUENCEI,tendency/ D892 50/0 50/0 stability,mL emulsioncharacteristicsat54 C, D1401 30max 30max minutesto3mLemulsion coppercorrosion,3hat100 C D130 1max 1max rust-preventingcharacteristics D665,procedureB Pass Pass oxidationstability,hourstoneut. D943 5000 5000 No.2.0 RPVOT,minutesto175kPapressure D2272 750min 750min drop RPVOT,retentionafternitrogen D2272,modified 85 85 treatment,% 1000-hTOSTsludge,mg D4310 200max 200max elastomercompatibilitySRENBR1,or ISO6072 ^-8to8 ^-8to8 SRENBR28PorSRE-NBR-28PX (168(cid:6)2hat100 C(cid:6)1 C),hardness change cleanlinessasfilledintoturbine,rating ISO4406-99"
+    },
+    {
+      "extractor": "Table 1",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "6",
+      "snippet": "6 LUBRICATIONANDLUBRICANTS Table1. WearCoefficientsforVariousSlidingCombinationsa Materialcombination Wearcoefficient,k zinconzinc 53 x 10^-3 lowcarbonsteelonlowcarbonsteel 7 x 10^-3 copperoncopper 11 x 10^-3 stainlesssteelonstainlesssteel 7 x 10^-3 copperonmildsteel 5 x 10^-4 mildsteeloncopper 17 x 10^-5 phenolicresinonphenolicresin 7 x 10^-6 aForequation9,fromRef.14. Where high reliability is needed, the friction should be measured using a proto- type device under design conditions (20). 2.4. Wear. The principal types of wear in sliding contacts are adhesive, abrasive,andcorrosivewear.Fatiguewear occurs inconcentratedcontacts(ball and roller bearings, gears, cams, and automotive valve lifters) under the"
+    },
+    {
+      "extractor": "Table 1",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "56",
+      "snippet": "56 LUBRICATIONANDLUBRICANTS The polymer is then fused to the surface as a coating that provides lubricity, abrasion and chemical resistance, or release properties. PTFE is outstanding in this group. In thin films it provides the lowest coefficient of friction (0.03-0.1) of any polymer, is effective from ^-200 to 250 C, andisgenerallyunreactivechemically.Thelowfrictionisattributedtothesmooth molecular profile of PTFE chains that allows easy sliding (194,196). Typical applications include chemical and food processing equipment, electrical compo- nents, and as a component to provide improved friction"
+    },
+    {
+      "extractor": "Table 3 ASTM",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "19",
+      "snippet": "LUBRICATION AND LUBRICANTS 19 Table3. TypicalPropertiesofGTLBaseStocka,b GTL-5, Industry Basestock typical range, properties ASTM properties min-max Value viscosityat100 C,cSt D445 4.5 4.0-5.0 - viscosityindex D2270 144 120-141 high pourpoint, C D97 ^-21 ^-24to^-12 low cold-crankingsimulatorat^-25 C,cP D5293 816 729-2239 low NOACKwt% D5800 7.8 10.4-14.8 low composition,mass% iso-paraffins 100 47.3-80.9 high monocycloparaffins 0 18.7-28.8 low polycycloparaffins 0 5.3-22.2 low aromatics 0 00-1.2 low aSeeRef.84. bReprintedwithpermission. 3.4. Polyalphaolefins. Group IV base stocks are poly(a-olefins) (PAO). Theyareproducedbysteamcrackinghydrocarbonstoproduceethylene;ethylene oligomerization to produce linear a-olefins (1-decene, 1-dodecene,"
+    },
+    {
+      "extractor": "Table 6",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "31",
+      "snippet": "noitadixOerutarepmeThgiHdna,stisopeDnotsiP,raeWrofEIII,FIII,GIIIecneuqeSMTSA,stnemeriuqeRtseTenignE .6elbaT 2-FGCASLI 5-FGCASLI noitacifissalcCASLI JSIPA 3-FGCASLI 4-FGCASLI NSIPA yrogetacecivresIPA 6991 LSIPA MSIPA 9002 :etadeussI EIIIECNEUQES 1002 4002 GIIIECNEUQES ecneuqestsetenigneMTSA 3355DMTSA FIIIECNEUQES GIIIECNEUQES 0237DMTSA erudecorptsetMTSA xam573 xam572 xam051 xam051 esaercniytisocsivcitamenik %,C 04ta 4 4 nim0.4 notsipdethgiew-egareva stirem,stisoped enon enon enon enon sgnirkcutstoh raewretfilsulpmac xam03 xam02 xam06 xam06 mm,egareva 46 mm,noitisoprepmumixam nim9.8 nim0.9 hsinravtriksnotsip xam1.5 xam2.5 L,noitpmusnoclio nim5.3 stisopeddnalgnirlioegareva nim2.9 gnitaregdulsenigneegareva enon gnikcitsretfil enon gniffucsretfil\u00femac troperdnaetar roedargniyats roedargniyats gnipmuperutarepmetwol edargrehgihtxen edargrehgihtxen tsetfodnetaytisocsiv )1-PTVRM(4864DMTSAyb 31"
+    },
+    {
+      "extractor": "CI-4 Hardness",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "38",
+      "snippet": "senignEleseiDekortS-ruoFfostnemeriuqeRecnamrofreP .21elbaT 4-JC 4-IC 4-HC 4-GC yrogetacecivresIPA )298DMTSA(scitsiretcarahcgnimaof ,xam,Lm,gnilttes/gnimaof 0/01 0/01 0/01 0/01 IECNEUQES 0/02 0/02 0/02 0/02 IIECNEUQES 0/01 0/01 0/01 0/01 IIIECNEUQES 4956D 4956D 8695D 8695D tsetnoisorrocMTSA 02 02 02 02 xam,mpp,esaercnireppoc 021 021 021 06 xam,mpp,esaercnidael 05 05 troper ,mpp,esaercninit 3 3 3 3 gnitarxam,031DMTSAybnoisorrocreppoc )7882DMTSA(noitallitsidro)0085DMTSA(ytilitalovKCAON 51 51 xam%,03-W01,C 052tassolevitaropave 31 xam%,rehto,C 052tassolevitaropave 02 xam,C 052tassolytilitalov%,03-W01EAS 81 xam,C 052tassolytilitalov%,04-W51EAS 3.9 xam,C 173tassolytilitalov%,03-W01EAS 5.21 xam,C 173tassolytilitalov%,04-W51EAS )8726DMTSA(ytilibatsraehs gniraehsretfaytisocsivcitamenik 3.9 3.9 3.9 nimtSc,03-WXEAS 5.21 5.21 5.21 nimtSc,04-WXEAS 000,52 000,52"
+    },
+    {
+      "extractor": "ISO VG 10",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "42",
+      "snippet": "42 LUBRICATIONANDLUBRICANTS Table13. ViscositySystemforIndustrialFluidLubricantsa Midpointviscosity, Kinematicviscositylimits,cStat40 C Viscositygrade cStat40 C min max ISOVG2 2.2 1.98 2.4 ISOVG3 3.2 2.88 3.52 ISOVG5 4.6 4.14 5.06 ISOVG7 6.8 6.12 7.48 ISOVG10 10 9.00 11.0 ISOVG15 15 13.5 16.5 ISOVG22 22 19.8 24.2 ISOVG32 32 28.8 35.2 ISOVG46 46 41.4 50.6 ISOVG68 68 61.2 74.8 ISOVG100 100 90.0 110 ISOVG150 150 135 165 ISOVG220 220 198 242 ISOVG320 320 288 352 ISOVG460 460 414 506 ISOVG680 680 612 748 ISOVG1000 1,000 900 1,100"
+    },
+    {
+      "extractor": "Fig 1 Temperatures",
+      "pdf_name": "Kirk-OthmerEncyclopediaofChemicalTechnology-LubricationandLubricants.pdf",
+      "page": "8",
+      "snippet": "8 LUBRICATIONANDLUBRICANTS Equation13givesconfusingresultsforVIvalues>100.Viscosityindexesof 100 or greater are calculated by the empirical formula (39): VI\u00bc\u00bd\u00f0\u00f0antilogN\u00de^-1\u00de=0:00715\u00fe100(cid:5) (14) where YN\u00bcH/U and Y\u00bckinematic viscosity at 100 C of the oil whose viscosity index is to be calculated. Viscosityindexissometimesusedasameasureofthequalityoflubricating oil, especially for selecting base stocks for automotive engine oils and automatic transmission fluids (ATFs). This is, however, not always applicable. The role of viscosity index in base stock selection is described later. Severalaromatictypefluids,polyphenylethers,arylphosphateesters,and halogenated aromatic hydrocarbons, have negative VIs. Effect of Pressure on Viscosity. The"
+    },
+    {
+      "extractor": "Product Tables",
+      "pdf_name": "prodTable.pdf",
+      "page": "1",
+      "snippet": "CHEMICAL AND PAINTS - SER/SEL MISCELLANEOUS CENTRIFUGAL PUMPS Extract from: MANUFACTURER SAFETY DATA SHEET CHEMICAL AND PAINTS HPC/12/M/------J15/DS/300 1. LV MOTOR Revision of the data sheet at time Name of the product Manufacturer User the product is manufactured/used TEKNOZINC 90 SE A TEKNOS 18.11.2005 Primer paint TEKNOPLAST PRIMER 3 TEKNOS 18.02.2021 Paint TEKNOPOX AQUA 0350 TEKNOS 03.03.2021 Paint UNIREX N 2 ExxonMobil 19.12.2019 Bearing grease 2. SEL/SER PUMP Revision of the data sheet at time Product Manufacturer User the product"
+    },
+    {
+      "extractor": "Product Tables",
+      "pdf_name": "prodTable.pdf",
+      "page": "2",
+      "snippet": "3. COUPLING Revision of the data sheet at time Product Manufacturer User the product is manufactured/used Brake cleaner 5 ltr. W\u00fcrth Norge AS 20.04.2017 Cleaning Fuchs Schmierstoffe ANTICORIT DFW 8301 08.06.2015 Preservation GmbH 4. BASE PLATE Revision of the data sheet at time Product Manufacturer User the product is manufactured/used Sika Deutschland SikaCor Zinc R March 2018 Primer paint GmbH Sika Deutschland SikaCor EG1 27.05.2021 Paint GmbH"
+    },
+    {
+      "extractor": "Greases",
+      "pdf_name": "testLubricant.pdf",
+      "page": "1",
+      "snippet": "7.2.4 Lubricants The following high performance greases can be used: WARNING! - Mobil Unirex N2 or N3 (lithium complex base) Do not mix different types of grease. - Mobil Mobilith SHC 100 (lithium complex base) Incompatible lubricants may cause bearing damage. - Shell Gadus S5 V100 2 (lithium complex base) When re-greasing, use only special ball bearing grease with - Kluber Kluberplex BEM 41-132 (special lithium base) the following properties: - FAG Arcanol TEMP110 (lithium complex base) - good quality"
+    },
+    {
+      "extractor": "OXX",
+      "pdf_name": "xyzLub.pdf",
+      "page": "1",
+      "snippet": "\u2713 Sufficient fluid is supplied for the functional check run of the pump. 1. For prolonged shutdown periods, start up the pump (set) regularly between once a month and once every three months for approximately five minutes. => This will prevent the formation of deposits within the pump and the pump intake area. The pump (set) is removed from the pipe and stored \u2713 The pump has been properly drained. \u2713 The safety instructions for dismantling the pump have been"
+    },
+    {
+      "extractor": "ABB Greasing",
+      "pdf_name": "ABB.pdf",
+      "page": "1",
+      "snippet": "nr | | / - | Hl | HL | | | i Hl ill | | -_------ Le Oe ee ee ied 28 ee ee i FS ees he ee OU ee ke eee eee eometdae.. eee e+e eee, + eee ees dette eens + Oe ere eee Pet hegereut eg }oontuntaeadene ne * <= oF Re hm ee ----- 7+ os. See eet 8 eee, ee Ee ee (tee ee to erees ye 6 4 -_-- +. SED"
+    },
+    {
+      "extractor": "ABB Greasing",
+      "pdf_name": "ABB.pdf",
+      "page": "2",
+      "snippet": "treet oerrre re 4 ver eadal batreeere serve \u2018 \u2019 . \u2019 tee tery \u2018cate if \u2018 ee | **. Led i tindined . \u00b0 o* teveranerre ore \u201core? vo \u00b0 crecorre ee Fe Fe HS ETEK TEESE OS SEE SHE TES EK TCE Se T ET Pee HO ee CeCe tenets thet etee th ewetre say shen j = ea | oS : 4s leva . \u2018se \u2018 Ma .\\ > os=\u00a2 . . - =\" == a a"
+    }
+  ]
+}
