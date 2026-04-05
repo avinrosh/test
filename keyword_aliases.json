@@ -1,0 +1,36 @@
+{
+  "Grease": {
+    "extractor": "Greases",
+    "aliases": [
+      "special ball bearing grease",
+      "high performance greases",
+      "greases"
+    ]
+  },
+  "ABB Greasing": {
+    "extractor": "ABB Greasing",
+    "aliases": [
+      "regreasing instructions",
+      "greased in factory with",
+      "the following or similar high performance grease can be used"
+    ]
+  },
+  "Manufacturer Matrix": {
+    "extractor": "Manufacturer Matrix",
+    "aliases": [
+      "sew eurodrive",
+      "fuchs",
+      "iso,sae",
+      "iso sae",
+      "[2]"
+    ]
+  },
+  "OXX": {
+    "extractor": "OXX",
+    "aliases": [
+      "internal preservation",
+      "external preservation",
+      "recommended products for the preservation of the pump"
+    ]
+  }
+}

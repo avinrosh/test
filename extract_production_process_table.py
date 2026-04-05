@@ -11,17 +11,35 @@ import pdfplumber
 import pypdfium2 as pdfium
 from openpyxl import Workbook, load_workbook
 
+from manufacturer_matrix_extractor import extract_manufacturer_matrix_rows
+
 
 PDF_PATH = Path(
     r"d:\App\pdfscrapper\testTable.pdf"
 )
 REQUESTS_FILE = Path(r"d:\App\pdfscrapper\extract_requests.txt")
+KEYWORD_ALIASES_FILE = Path(r"d:\App\pdfscrapper\keyword_aliases.json")
 HISTORY_FILE = Path(r"d:\App\pdfscrapper\extraction_history.json")
 FEEDBACK_FILE = Path(r"d:\App\pdfscrapper\feedback_history.json")
 DEFAULT_TESSERACT_PATHS = [
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
     Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
 ]
+SAFE_OCR_SUBSTITUTIONS = {
+    "O": {"0"},
+    "0": {"O"},
+    "I": {"1", "l"},
+    "l": {"1", "I"},
+    "1": {"I", "l"},
+    "S": {"5"},
+    "5": {"S"},
+    "B": {"8"},
+    "8": {"B"},
+    "Z": {"2"},
+    "2": {"Z"},
+    "G": {"6"},
+    "6": {"G"},
+}
 
 PRODUCTION_PROCESS_PAGE = 4
 TABLE_1_PAGE = 6
@@ -189,16 +207,104 @@ def save_history(history_file: Path, history: dict) -> None:
     history_file.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
+def load_keyword_aliases(keyword_aliases_file: Path) -> dict:
+    if not keyword_aliases_file.exists():
+        return {}
+    try:
+        data = json.loads(keyword_aliases_file.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_keyword_alias_entry(keyword_aliases: dict, keyword: str) -> dict:
+    if keyword in keyword_aliases and isinstance(keyword_aliases[keyword], dict):
+        return keyword_aliases[keyword]
+
+    normalized_keyword = normalize_option_name(keyword)
+    for canonical_keyword, entry in keyword_aliases.items():
+        if normalize_option_name(canonical_keyword) == normalized_keyword and isinstance(entry, dict):
+            return entry
+    return {}
+
+
+def get_aliases_for_keyword(
+    keyword_aliases: dict,
+    keyword: str,
+    *,
+    fallback_aliases: list[str] | None = None,
+) -> list[str]:
+    entry = get_keyword_alias_entry(keyword_aliases, keyword)
+    aliases = entry.get("aliases", []) if isinstance(entry, dict) else []
+    normalized_aliases = [normalize_value(alias).lower() for alias in aliases if alias]
+    if keyword:
+        normalized_aliases.insert(0, normalize_value(keyword).lower())
+    if fallback_aliases:
+        normalized_aliases.extend(normalize_value(alias).lower() for alias in fallback_aliases)
+
+    deduplicated_aliases: list[str] = []
+    seen_aliases = set()
+    for alias in normalized_aliases:
+        if alias and alias not in seen_aliases:
+            deduplicated_aliases.append(alias)
+            seen_aliases.add(alias)
+    return deduplicated_aliases
+
+
+def resolve_requested_options_with_aliases(
+    requested_options: set[str] | None,
+    available_extractors: list[tuple[str, object]],
+    keyword_aliases: dict,
+) -> tuple[set[str] | None, set[str]]:
+    if requested_options is None:
+        return None, set()
+
+    available_option_names = {
+        normalize_option_name(sheet_name): sheet_name for sheet_name, _extractor in available_extractors
+    }
+    alias_to_extractor: dict[str, str] = {}
+    for canonical_keyword, entry in keyword_aliases.items():
+        if not isinstance(entry, dict):
+            continue
+        extractor_name = entry.get("extractor")
+        if not extractor_name:
+            continue
+        alias_to_extractor[normalize_option_name(canonical_keyword)] = normalize_option_name(
+            extractor_name
+        )
+
+    resolved_options: set[str] = set()
+    unknown_options: set[str] = set()
+    for option in requested_options:
+        if option in available_option_names:
+            resolved_options.add(option)
+        elif option in alias_to_extractor:
+            resolved_options.add(alias_to_extractor[option])
+        else:
+            unknown_options.add(option)
+
+    return resolved_options or None, unknown_options
+
+
 def load_feedback_memory(feedback_file: Path) -> dict:
     if not feedback_file.exists():
-        return {"confirmations": [], "corrections": []}
+        return {"confirmations": [], "corrections": [], "pattern_rules": []}
     try:
-        return json.loads(feedback_file.read_text(encoding="utf-8"))
+        data = json.loads(feedback_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"confirmations": [], "corrections": [], "pattern_rules": []}
+        data.setdefault("confirmations", [])
+        data.setdefault("corrections", [])
+        data.setdefault("pattern_rules", [])
+        return data
     except Exception:
-        return {"confirmations": [], "corrections": []}
+        return {"confirmations": [], "corrections": [], "pattern_rules": []}
 
 
 def save_feedback_memory(feedback_file: Path, feedback_memory: dict) -> None:
+    feedback_memory.setdefault("confirmations", [])
+    feedback_memory.setdefault("corrections", [])
+    feedback_memory.setdefault("pattern_rules", [])
     feedback_file.write_text(json.dumps(feedback_memory, indent=2), encoding="utf-8")
 
 
@@ -210,6 +316,100 @@ def build_feedback_key(sheet_name: str, field_name: str, value: str) -> str:
             normalize_value(value).lower(),
         ]
     )
+
+
+def build_row_signature(row: dict[str, str], target_field: str) -> str:
+    excluded_fields = {
+        "Human Evaluation",
+        "Review Field",
+        "Source",
+        "Page",
+        "Occurrence",
+        "Row Type",
+        target_field,
+    }
+    signature_parts = []
+    for key, value in row.items():
+        if key in excluded_fields:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            continue
+        signature_parts.append(f"{normalize_option_name(key)}={normalize_value(value).lower()}")
+    return "||".join(signature_parts)
+
+
+def build_value_shape(value: str) -> str:
+    shape_parts = []
+    for character in normalize_value(value):
+        if character.isdigit():
+            shape_parts.append("D")
+        elif character.isalpha():
+            shape_parts.append("L")
+        elif character.isspace():
+            shape_parts.append(" ")
+        else:
+            shape_parts.append(character)
+    return "".join(shape_parts)
+
+
+def build_value_skeleton(value: str) -> str:
+    return "".join(character.lower() for character in normalize_value(value) if character.isalnum())
+
+
+def derive_pattern_rule(original_value: str, corrected_value: str) -> dict | None:
+    original = normalize_value(original_value)
+    corrected = normalize_value(corrected_value)
+    if not original or not corrected or original == corrected:
+        return None
+
+    if len(original) != len(corrected):
+        return None
+
+    substitutions = []
+    for index, (original_char, corrected_char) in enumerate(zip(original, corrected)):
+        if original_char == corrected_char:
+            continue
+        allowed_targets = SAFE_OCR_SUBSTITUTIONS.get(original_char, set())
+        if corrected_char not in allowed_targets:
+            return None
+        substitutions.append(
+            {
+                "index": index,
+                "from": original_char,
+                "to": corrected_char,
+            }
+        )
+
+    if not substitutions:
+        return None
+
+    return {
+        "value_shape": build_value_shape(original),
+        "value_length": len(original),
+        "substitutions": substitutions,
+        "example_original": original,
+        "example_corrected": corrected,
+    }
+
+
+def apply_pattern_rule_to_value(value: str, pattern_rule: dict) -> str | None:
+    candidate = normalize_value(value)
+    if len(candidate) != pattern_rule.get("value_length"):
+        return None
+    if build_value_shape(candidate) != pattern_rule.get("value_shape"):
+        return None
+
+    characters = list(candidate)
+    for substitution in pattern_rule.get("substitutions", []):
+        index = substitution["index"]
+        expected_source = substitution["from"]
+        target = substitution["to"]
+        if index >= len(characters):
+            return None
+        if characters[index] != expected_source:
+            return None
+        characters[index] = target
+    return "".join(characters)
 
 
 def determine_review_field(row: dict[str, str]) -> str:
@@ -253,6 +453,7 @@ def apply_feedback_to_rows(
         for correction in feedback_memory.get("corrections", [])
         if correction.get("key") and correction.get("corrected_value") is not None
     }
+    pattern_rules = feedback_memory.get("pattern_rules", [])
 
     for row in rows:
         corrected_row = dict(row)
@@ -264,6 +465,21 @@ def apply_feedback_to_rows(
             feedback_key = build_feedback_key(sheet_name, field_name, value)
             if feedback_key in correction_map:
                 corrected_row[field_name] = correction_map[feedback_key]
+                continue
+
+            row_signature = build_row_signature(corrected_row, field_name)
+            matching_rules = [
+                rule
+                for rule in pattern_rules
+                if rule.get("sheet") == sheet_name
+                and rule.get("field") == field_name
+                and rule.get("row_signature") == row_signature
+            ]
+            for rule in matching_rules:
+                corrected_value = apply_pattern_rule_to_value(value, rule)
+                if corrected_value and corrected_value != value:
+                    corrected_row[field_name] = corrected_value
+                    break
         corrected_rows.append(corrected_row)
 
     return add_human_evaluation_column(corrected_rows)
@@ -277,6 +493,17 @@ def ingest_feedback_workbook(workbook_path: Path, feedback_memory: dict) -> int:
     }
     seen_corrections = {
         entry["key"] for entry in feedback_memory.get("corrections", []) if entry.get("key")
+    }
+    seen_pattern_rules = {
+        "||".join(
+            [
+                normalize_option_name(entry.get("sheet", "")),
+                normalize_option_name(entry.get("field", "")),
+                entry.get("row_signature", ""),
+                entry.get("value_shape", ""),
+            ]
+        )
+        for entry in feedback_memory.get("pattern_rules", [])
     }
 
     for sheet_name in workbook.sheetnames:
@@ -345,6 +572,12 @@ def ingest_feedback_workbook(workbook_path: Path, feedback_memory: dict) -> int:
                         original_value = normalized_data_row[field_index]
                         field_name = headers[field_index]
                         feedback_key = build_feedback_key(sheet_name, field_name, original_value)
+                        row_dict = {
+                            headers[index]: normalized_data_row[index]
+                            for index in range(min(len(headers), len(normalized_data_row)))
+                            if headers[index]
+                        }
+                        row_signature = build_row_signature(row_dict, field_name)
 
                         if evaluation_value.lower() == "correct":
                             if feedback_key not in seen_confirmations:
@@ -358,18 +591,42 @@ def ingest_feedback_workbook(workbook_path: Path, feedback_memory: dict) -> int:
                                 )
                                 seen_confirmations.add(feedback_key)
                                 updates += 1
-                        elif review_field_index is not None and feedback_key not in seen_corrections:
-                            feedback_memory.setdefault("corrections", []).append(
-                                {
-                                    "key": feedback_key,
+                        else:
+                            if review_field_index is not None and feedback_key not in seen_corrections:
+                                feedback_memory.setdefault("corrections", []).append(
+                                    {
+                                        "key": feedback_key,
+                                        "sheet": sheet_name,
+                                        "field": field_name,
+                                        "original_value": original_value,
+                                        "corrected_value": evaluation_value,
+                                    }
+                                )
+                                seen_corrections.add(feedback_key)
+                                updates += 1
+
+                            pattern_rule = derive_pattern_rule(original_value, evaluation_value)
+                            if pattern_rule:
+                                pattern_rule_entry = {
                                     "sheet": sheet_name,
                                     "field": field_name,
-                                    "original_value": original_value,
-                                    "corrected_value": evaluation_value,
+                                    "row_signature": row_signature,
+                                    **pattern_rule,
                                 }
-                            )
-                            seen_corrections.add(feedback_key)
-                            updates += 1
+                                pattern_rule_key = "||".join(
+                                    [
+                                        normalize_option_name(sheet_name),
+                                        normalize_option_name(field_name),
+                                        row_signature,
+                                        pattern_rule["value_shape"],
+                                    ]
+                                )
+                                if pattern_rule_key not in seen_pattern_rules:
+                                    feedback_memory.setdefault("pattern_rules", []).append(
+                                        pattern_rule_entry
+                                    )
+                                    seen_pattern_rules.add(pattern_rule_key)
+                                    updates += 1
 
                 row_index += 1
 
@@ -1487,11 +1744,16 @@ def extract_grease_rows(pdf_path: Path) -> list[dict[str, str]]:
     seen: set[tuple[str, str, str, str]] = set()
     pending_bullet_text: str | None = None
     collecting_special_ball_bearing_bullets = False
-    trigger_terms = [
-        "special ball bearing grease",
-        "high performance greases",
-        "greases",
-    ]
+    keyword_aliases = load_keyword_aliases(KEYWORD_ALIASES_FILE)
+    trigger_terms = get_aliases_for_keyword(
+        keyword_aliases,
+        "Grease",
+        fallback_aliases=[
+            "special ball bearing grease",
+            "high performance greases",
+            "greases",
+        ],
+    )
 
     def add_row(
         *,
@@ -1915,6 +2177,7 @@ def get_available_extractors():
         ("Fig 1 Temperatures", extract_fig_1_temperature_rows),
         ("ABB Greasing", extract_abb_greasing_rows),
         ("Greases", extract_grease_rows),
+        ("Manufacturer Matrix", extract_manufacturer_matrix_rows),
         ("Product Tables", extract_product_table_rows),
         ("OXX", extract_oxx_rows),
     ]
@@ -1923,20 +2186,23 @@ def get_available_extractors():
 def select_extractors(
     requested_options: set[str] | None,
     available_extractors: list[tuple[str, object]],
+    keyword_aliases: dict,
 ) -> list[tuple[str, object]]:
+    resolved_requested_options, unknown_options = resolve_requested_options_with_aliases(
+        requested_options,
+        available_extractors,
+        keyword_aliases,
+    )
+
     selected_extractors = available_extractors
-    if requested_options is not None:
+    if resolved_requested_options is not None:
         selected_extractors = [
             (sheet_name, extractor)
             for sheet_name, extractor in available_extractors
-            if normalize_option_name(sheet_name) in requested_options
+            if normalize_option_name(sheet_name) in resolved_requested_options
         ]
 
-        unknown_options = sorted(
-            requested_options
-            - {normalize_option_name(sheet_name) for sheet_name, _extractor in available_extractors}
-        )
-        for option in unknown_options:
+        for option in sorted(unknown_options):
             print(f"Skipping unknown option: {option}")
 
     return selected_extractors
@@ -1962,9 +2228,14 @@ def process_pdf(
     requested_options: set[str] | None,
     available_extractors: list[tuple[str, object]],
     feedback_memory: dict,
+    keyword_aliases: dict,
 ) -> list[tuple[str, list[dict[str, str]]]]:
     job_start_time = time.perf_counter()
-    selected_extractors = select_extractors(requested_options, available_extractors)
+    selected_extractors = select_extractors(
+        requested_options,
+        available_extractors,
+        keyword_aliases,
+    )
 
     print(f"PDF: {pdf_path}")
     print(f"Selected extractors: {len(selected_extractors)}")
@@ -1999,6 +2270,7 @@ def process_pdf(
 def main() -> None:
     pdf_paths, requests_file, feedback_workbooks = resolve_runtime_paths()
     global_requested_options, per_pdf_options = load_requested_options(requests_file)
+    keyword_aliases = load_keyword_aliases(KEYWORD_ALIASES_FILE)
     history = load_history(HISTORY_FILE)
     feedback_memory = load_feedback_memory(FEEDBACK_FILE)
     available_extractors = get_available_extractors()
@@ -2054,6 +2326,7 @@ def main() -> None:
             requested_options,
             available_extractors,
             feedback_memory,
+            keyword_aliases,
         )
         for sheet_name, rows in found_sheet_rows:
             update_history_with_extraction(history, resolved_pdf_path, sheet_name, rows)

@@ -1,4 +1,20 @@
 {
   "confirmations": [],
-  "corrections": []
+  "corrections": [
+    {
+      "key": "abbgreasing||value||6317/c3",
+      "sheet": "ABB Greasing",
+      "field": "Value",
+      "original_value": "6317/C3",
+      "corrected_value": "6312/C3"
+    },
+    {
+      "key": "abbgreasing||value||6219/c3",
+      "sheet": "ABB Greasing",
+      "field": "Value",
+      "original_value": "6219/C3",
+      "corrected_value": "6210/C3"
+    }
+  ],
+  "pattern_rules": []
 }

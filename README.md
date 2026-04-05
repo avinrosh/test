@@ -13,6 +13,7 @@ It supports:
 
 - [extract_production_process_table.py](d:\App\pdfscrapper\extract_production_process_table.py): main extraction script
 - [extract_requests.txt](d:\App\pdfscrapper\extract_requests.txt): per-PDF extractor configuration
+- [keyword_aliases.json](d:\App\pdfscrapper\keyword_aliases.json): canonical keywords and their aliases
 - [extraction_history.json](d:\App\pdfscrapper\extraction_history.json): learned historical pattern memory
 - [feedback_history.json](d:\App\pdfscrapper\feedback_history.json): learned human feedback corrections
 
@@ -82,6 +83,13 @@ python extract_production_process_table.py myfile.pdf extract_requests.txt revie
 
 The script reads extraction requests from `extract_requests.txt`.
 
+Requests can use either:
+
+- exact extractor names such as `Greases`
+- canonical business keywords such as `Grease`
+
+If a canonical keyword is used, the script resolves it through `keyword_aliases.json` and maps it to the appropriate extractor.
+
 You can define:
 
 1. Global options for a single PDF:
@@ -93,12 +101,38 @@ Greases, OXX
 2. Per-PDF options for batch processing:
 
 ```text
-testLubricant.pdf: Greases
+testLubricant.pdf: Grease
 prodTable.pdf: Product Tables, OXX
 ABB.pdf: ABB Greasing
 ```
 
 If no explicit request is available for a PDF, the history-based recommender may suggest extractors automatically.
+
+## Canonical Keyword Aliases
+
+The file `keyword_aliases.json` stores canonical keywords and all of the aliases that should be searched in the PDF.
+
+Example:
+
+```json
+{
+  "Grease": {
+    "extractor": "Greases",
+    "aliases": [
+      "special ball bearing grease",
+      "high performance greases",
+      "greases"
+    ]
+  }
+}
+```
+
+How it is used:
+
+1. You put `Grease` in `extract_requests.txt`
+2. The script maps `Grease` to the `Greases` extractor
+3. The `Greases` extractor searches the PDF for all configured aliases
+4. If any of those aliases are found, the matching pages are processed
 
 ## Output Files
 
@@ -204,8 +238,30 @@ It stores:
 
 - confirmations in `feedback_history.json`
 - corrections in `feedback_history.json`
+- safe pattern-aware rules in `feedback_history.json`
 
 Then, during future extraction runs, matching values are auto-corrected before writing the next workbook.
+
+### Pattern-Aware Feedback
+
+The feedback loop now works at two levels:
+
+1. Value-level feedback
+- exact corrected values are reused when the same extracted value appears again
+
+2. Pattern-aware feedback
+- when a reviewed correction looks like a safe OCR-style character substitution in the same row context, the script stores a reusable pattern rule
+- those rules are applied only when:
+  - the same sheet is involved
+  - the same review field is involved
+  - the same row context/signature is present
+  - the value shape matches
+
+This helps with repeated OCR-style mistakes across similar PDFs without rewriting the Python code itself.
+
+Important note:
+- the pattern-aware layer is conservative
+- it is intended for safe OCR-like substitutions and not for inventing arbitrary new numeric values
 
 ### Feedback Workflow
 
